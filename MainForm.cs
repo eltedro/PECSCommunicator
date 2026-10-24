@@ -10,19 +10,19 @@ public partial class MainForm : Form
 
     private void SetupPECSTiles()
     {
-        // Simple 2x3 grid of large buttons for the shell
+        // Simple 2x2 grid of large buttons for the shell
         var tiles = new[]
         {
             new { Text = "Toilet", Color = Color.LightBlue },
             new { Text = "Snack", Color = Color.LightGreen },
             new { Text = "Water", Color = Color.LightCyan },
             new { Text = "Walk", Color = Color.LightYellow },
-            new { Text = "Help", Color = Color.LightCoral },
-            new { Text = "Done", Color = Color.LightGray }
+            // new { Text = "Help", Color = Color.LightCoral },
+            // new { Text = "Done", Color = Color.LightGray }
         };
 
         tableLayoutPanel1.RowCount = 2;
-        tableLayoutPanel1.ColumnCount = 3;
+        tableLayoutPanel1.ColumnCount = 2;
         tableLayoutPanel1.Dock = DockStyle.Fill;
         tableLayoutPanel1.Padding = new Padding(20);
 
