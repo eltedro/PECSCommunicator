@@ -16,7 +16,7 @@ public partial class MainForm : Form
             new { Text = "Toilet", Color = Color.LightBlue },
             new { Text = "Snack", Color = Color.LightGreen },
             new { Text = "Water", Color = Color.LightCyan },
-            new { Text = "Walk", Color = Color.LightYellow },
+            new { Text = "Help", Color = Color.LightYellow },
             // new { Text = "Help", Color = Color.LightCoral },
             // new { Text = "Done", Color = Color.LightGray }
         };
@@ -39,7 +39,7 @@ public partial class MainForm : Form
                 Tag = tiles[i].Text
             };
             btn.Click += Tile_Click;
-            tableLayoutPanel1.Controls.Add(btn, i % 3, i / 3);
+            tableLayoutPanel1.Controls.Add(btn, i % tableLayoutPanel1.ColumnCount, i / tableLayoutPanel1.ColumnCount);
         }
     }
 
