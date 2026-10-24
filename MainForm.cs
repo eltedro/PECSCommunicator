@@ -2,27 +2,28 @@ namespace PECSCommunicator;
 
 public partial class MainForm : Form
 {
+    private Label? _overlayLabel;
+
     public MainForm()
     {
         InitializeComponent();
         SetupPECSTiles();
+        SetupOverlay();
     }
 
     private void SetupPECSTiles()
     {
-        // Simple 2x2 grid of large buttons for the shell
         var tiles = new[]
         {
             new { Text = "Toilet", Color = Color.LightBlue },
             new { Text = "Snack", Color = Color.LightGreen },
             new { Text = "Water", Color = Color.LightCyan },
-            new { Text = "Help", Color = Color.LightYellow },
-            // new { Text = "Help", Color = Color.LightCoral },
-            // new { Text = "Done", Color = Color.LightGray }
+            new { Text = "Walk", Color = Color.LightYellow }
         };
 
-        tableLayoutPanel1.RowCount = 2;
-        tableLayoutPanel1.ColumnCount = 2;
+        const int NUMCOLUMNS = 2;
+        tableLayoutPanel1.RowCount = (int)Math.Ceiling((double)tiles.Length / NUMCOLUMNS);
+        tableLayoutPanel1.ColumnCount = NUMCOLUMNS;
         tableLayoutPanel1.Dock = DockStyle.Fill;
         tableLayoutPanel1.Padding = new Padding(20);
 
@@ -31,7 +32,7 @@ public partial class MainForm : Form
             var btn = new Button
             {
                 Text = tiles[i].Text,
-                Font = new Font("Segoe UI", 28, FontStyle.Bold),
+                Font = new Font("Segoe UI", 72, FontStyle.Bold),
                 BackColor = tiles[i].Color,
                 Dock = DockStyle.Fill,
                 Margin = new Padding(15),
@@ -39,17 +40,48 @@ public partial class MainForm : Form
                 Tag = tiles[i].Text
             };
             btn.Click += Tile_Click;
-            tableLayoutPanel1.Controls.Add(btn, i % tableLayoutPanel1.ColumnCount, i / tableLayoutPanel1.ColumnCount);
+            tableLayoutPanel1.Controls.Add(btn, i % NUMCOLUMNS, i / NUMCOLUMNS);  
         }
     }
 
-    private void Tile_Click(object? sender, EventArgs e)
+    private void SetupOverlay()
     {
-        if (sender is Button btn && btn.Tag is string label)
+        _overlayLabel = new Label
         {
-            // Stage 1: just confirm the press. Messaging comes later.
-            MessageBox.Show($"You pressed: {label}\n\n(This will send a message in a later stage.)",
-                            "PECS", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Text = "Sent!",
+            Font = new Font("Segoe UI", 72, FontStyle.Bold),
+            ForeColor = Color.White,
+            BackColor = Color.FromArgb(180, 0, 128, 0),  // semi-transparent green
+            TextAlign = ContentAlignment.MiddleCenter,
+            Dock = DockStyle.Fill,
+            Visible = false
+        };
+        Controls.Add(_overlayLabel);
+        _overlayLabel.BringToFront();
+    }
+
+    private async void Tile_Click(object? sender, EventArgs e)
+    {
+        if (sender is not Button btn || btn.Tag is not string label) return;
+
+        System.Media.SystemSounds.Asterisk.Play();
+
+        // Brief highlight on the button
+        var originalColor = btn.BackColor;
+        btn.BackColor = Color.White;
+        await Task.Delay(150);
+        btn.BackColor = originalColor;
+
+        // Show overlay
+        if (_overlayLabel != null)
+        {
+            _overlayLabel.Text = $"{label}\nSent!";
+            _overlayLabel.Visible = true;
+            await Task.Delay(1200);
+            _overlayLabel.Visible = false;
         }
+
+        // TODO Stage 3: actual messaging here
+        // Debug.WriteLine($"Would send: {label}");
     }
 }
