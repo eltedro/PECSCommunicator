@@ -1,3 +1,17 @@
+ï»¿/**
+ * Project: PECSCommunicator
+ * File: MainForm.cs
+ * This file now encoded in UTF-8.
+ * Initial history: https://x.com/i/grok/share/c2hhcmQtMw_69196335-2278-4bf2-b2c5-bf6f369e5fd3
+ * 
+ */
+
+/**
+ * TODO: 
+ * [ ] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
+ * 
+ */
+
 using System.Net.Http;
 using System.Text;
 
@@ -63,8 +77,30 @@ public partial class MainForm : Form
         _overlayLabel.BringToFront();
     }
 
-    private static readonly HttpClient _httpClient = new HttpClient();
-    private const string ListenerUrl = "http://192.168.0.231:5050/pecs";   // change to the IP of the PC running the listener
+    // Short timeout so a missing listener never leaves requests hanging.
+    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
+    // Listener address comes from appsettings.json (next to the exe) so it can change without a rebuild.
+    private static readonly string ListenerUrl = LoadListenerUrl();
+
+    private static string LoadListenerUrl()
+    {
+        const string fallback = "http://localhost:5050/pecs";
+        try
+        {
+            var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+            if (!File.Exists(path)) return fallback;
+            var options = new System.Text.Json.JsonDocumentOptions { CommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true };
+            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path), options);
+            return doc.RootElement.TryGetProperty("ListenerUrl", out var url) && !string.IsNullOrWhiteSpace(url.GetString())
+                ? url.GetString()!
+                : fallback;
+        }
+        catch
+        {
+            return fallback;
+        }
+    }
 
     private async void Tile_Click(object? sender, EventArgs e)
     {
@@ -93,16 +129,14 @@ public partial class MainForm : Form
     {
         try
         {
-            var content = new StringContent(
-                $"{{\"tile\":\"{tile}\",\"time\":\"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\"}}",
-                Encoding.UTF8,
-                "application/json");
-
-            await _httpClient.PostAsync(ListenerUrl, content);
+            // Serialize properly so tile names with quotes or special characters stay valid JSON.
+            var json = System.Text.Json.JsonSerializer.Serialize(new { tile, time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+            using var content = new StringContent(json, Encoding.UTF8, "application/json");
+            using var response = await _httpClient.PostAsync(ListenerUrl, content);
         }
         catch
         {
-            // Silent fail – we don’t want to interrupt Ian
+            // Silent fail â€“ we donâ€™t want to interrupt Ian
         }
     }
 
