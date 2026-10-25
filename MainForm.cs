@@ -7,11 +7,19 @@
  */
 
 /**
+ * Application CONOP: SEE: PECS_Grok_History.md.
+ * 
  * TODO: 
  * [x] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
- * [ ] add a "Settings" menu item to change the listener URL without needing to edit appsettings.json
- * [ ] add a "Test Connection" button to verify the listener is reachable
- * [ ] add pictures to the Resources folder that match the PECS tiles names (Text) and use them instead of text on the buttons
+ * [ ] 1. move tile definitions (label, color, image file) into appsettings.json so tiles change without a rebuild
+ * [ ] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
+ * [ ] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
+ * [ ] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
+ * [ ] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
+ * [ ] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
+ * [ ] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
+ * [ ] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
+ * [ ] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * 
  */
 
