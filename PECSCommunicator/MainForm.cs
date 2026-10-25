@@ -11,7 +11,7 @@
  * 
  * TODO: 
  * [x] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
- * [ ] 1. move tile definitions (label, color, image file) into appsettings.json so tiles change without a rebuild
+ * [x] 1. move tile definitions (label, color, image file) into appsettings.json so tiles change without a rebuild
  * [ ] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
  * [ ] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
  * [ ] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
@@ -30,6 +30,13 @@ namespace PECSCommunicator;
 
 public partial class MainForm : Form
 {
+    // Settings (listener URL, columns, tiles) come from appsettings.json next to the exe,
+    // so tiles and the listener address can change without a rebuild.
+    private static readonly AppSettings Settings = AppSettings.Load();
+
+    // Short timeout so a missing listener never leaves requests hanging.
+    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+
     private Label? _overlayLabel;
 
     public MainForm()
@@ -39,37 +46,46 @@ public partial class MainForm : Form
         SetupOverlay();
     }
 
+    /// <summary>Builds the tile grid from the configured tiles and column count.</summary>
     private void SetupPECSTiles()
     {
-        var tiles = new[]
-        {
-            new { Text = "Toilet", Color = Color.LightBlue },
-            new { Text = "Snack", Color = Color.LightGreen },
-            new { Text = "Water", Color = Color.LightCyan },
-            new { Text = "Walk", Color = Color.LightYellow }
-        };
+        var tiles = Settings.Tiles;
+        int columns = Math.Min(Settings.Columns, tiles.Count);
+        int rows = (int)Math.Ceiling((double)tiles.Count / columns);
 
-        const int NUMCOLUMNS = 2;
-        tableLayoutPanel1.RowCount = (int)Math.Ceiling((double)tiles.Length / NUMCOLUMNS);
-        tableLayoutPanel1.ColumnCount = NUMCOLUMNS;
+        tableLayoutPanel1.SuspendLayout();
+        tableLayoutPanel1.Controls.Clear();
         tableLayoutPanel1.Dock = DockStyle.Fill;
         tableLayoutPanel1.Padding = new Padding(20);
 
-        for (int i = 0; i < tiles.Length; i++)
+        // Replace the designer's fixed 2x2 styles with equal percentages for any count.
+        tableLayoutPanel1.ColumnStyles.Clear();
+        tableLayoutPanel1.RowStyles.Clear();
+        tableLayoutPanel1.ColumnCount = columns;
+        tableLayoutPanel1.RowCount = rows;
+        for (int c = 0; c < columns; c++)
+            tableLayoutPanel1.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / columns));
+        for (int r = 0; r < rows; r++)
+            tableLayoutPanel1.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / rows));
+
+        for (int i = 0; i < tiles.Count; i++)
         {
+            var tile = tiles[i];
             var btn = new Button
             {
-                Text = tiles[i].Text,
+                Text = tile.Label,
                 Font = new Font("Segoe UI", 72, FontStyle.Bold),
-                BackColor = tiles[i].Color,
+                BackColor = tile.ResolveColor(),
                 Dock = DockStyle.Fill,
                 Margin = new Padding(15),
                 FlatStyle = FlatStyle.Flat,
-                Tag = tiles[i].Text
+                Tag = tile.Label
             };
             btn.Click += Tile_Click;
-            tableLayoutPanel1.Controls.Add(btn, i % NUMCOLUMNS, i / NUMCOLUMNS);  
+            tableLayoutPanel1.Controls.Add(btn, i % columns, i / columns);
         }
+
+        tableLayoutPanel1.ResumeLayout();
     }
 
     private void SetupOverlay()
@@ -86,31 +102,6 @@ public partial class MainForm : Form
         };
         Controls.Add(_overlayLabel);
         _overlayLabel.BringToFront();
-    }
-
-    // Short timeout so a missing listener never leaves requests hanging.
-    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-
-    // Listener address comes from appsettings.json (next to the exe) so it can change without a rebuild.
-    private static readonly string ListenerUrl = LoadListenerUrl();
-
-    private static string LoadListenerUrl()
-    {
-        const string fallback = "http://localhost:5050/pecs";
-        try
-        {
-            var path = Path.Combine(AppContext.BaseDirectory, "appsettings.json");
-            if (!File.Exists(path)) return fallback;
-            var options = new System.Text.Json.JsonDocumentOptions { CommentHandling = System.Text.Json.JsonCommentHandling.Skip, AllowTrailingCommas = true };
-            using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(path), options);
-            return doc.RootElement.TryGetProperty("ListenerUrl", out var url) && !string.IsNullOrWhiteSpace(url.GetString())
-                ? url.GetString()!
-                : fallback;
-        }
-        catch
-        {
-            return fallback;
-        }
     }
 
     private async void Tile_Click(object? sender, EventArgs e)
@@ -143,12 +134,11 @@ public partial class MainForm : Form
             // Serialize properly so tile names with quotes or special characters stay valid JSON.
             var json = System.Text.Json.JsonSerializer.Serialize(new { tile, time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
             using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var response = await _httpClient.PostAsync(ListenerUrl, content);
+            using var response = await _httpClient.PostAsync(Settings.ListenerUrl, content);
         }
         catch
         {
-            // Silent fail – we don’t want to interrupt Ian
+            // Silent fail - we don't want to interrupt Ian
         }
     }
-
 }
