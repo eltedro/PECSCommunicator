@@ -1,4 +1,4 @@
-﻿namespace PECSCommunicator;
+namespace PECSCommunicator;
 
 /// <summary>
 /// Hidden adult settings dialog (opened by a 3-second corner hold or Ctrl+Shift+S).
@@ -19,7 +19,9 @@ public sealed class SettingsForm : Form
     /// <summary>The validated listener URLs after the user presses Save.</summary>
     public IReadOnlyList<string> ListenerUrls { get; private set; }
 
-    public SettingsForm(IReadOnlyList<string> currentUrls, string? lastStatus = null, string? placement = null)
+    /// <param name="reloadTiles">TODO #10: rebuilds the main screen's tiles and returns a one-line summary; null hides the button.</param>
+    public SettingsForm(IReadOnlyList<string> currentUrls, string? lastStatus = null, string? placement = null,
+        Func<string>? reloadTiles = null)
     {
         ListenerUrls = currentUrls;
 
@@ -87,9 +89,18 @@ public sealed class SettingsForm : Form
 
         // TODO #4: "Test Connection" checks every URL in the box without saving them.
         _testButton = MakeButton("Test Connection");
-        _testButton.Width = 260;
+        _testButton.Width = 240;
         _testButton.Click += TestButton_Click;
         buttons.Controls.Add(_testButton);
+
+        // TODO #10: "Reload tiles" rescans the Resources folder now (normally a change there is picked
+        // up by itself within about a second) and shows what was loaded.
+        if (reloadTiles != null)
+        {
+            var reload = MakeButton("Reload tiles");
+            reload.Click += (_, _) => ShowStatus("Tiles reloaded: " + reloadTiles(), ok: true);
+            buttons.Controls.Add(reload);
+        }
 
         layout.Controls.Add(urlLabel, 0, 0);
         layout.Controls.Add(_urlBox, 0, 1);

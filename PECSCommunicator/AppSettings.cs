@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 
 namespace PECSCommunicator;
 
@@ -34,7 +34,8 @@ public sealed record TileDefinition(string Label, string Color, string Image = "
 public sealed class AppSettings
 {
     public const string DefaultListenerUrl = "http://localhost:5050/pecs";
-    public const int DefaultColumns = 2;
+    /// <summary>0 = automatic columns for the tile count (TODO #10, see TileCatalog.ColumnsFor).</summary>
+    public const int DefaultColumns = 0;
     public const double DefaultDebounceSeconds = 2;
     public static readonly Size DefaultTouchScreenSize = new(1024, 600);
 
@@ -51,6 +52,7 @@ public sealed class AppSettings
     // Plain URL strings keep the file simple; the URL itself identifies each listener in the status and CSV.
     // Mutable so the Settings screen can apply a new list without a restart.
     public IReadOnlyList<string> ListenerUrls { get; set; } = [DefaultListenerUrl];
+    /// <summary>Tile columns; 0 = automatic, a positive value is used as is.</summary>
     public int Columns { get; init; } = DefaultColumns;
 
     /// <summary>Repeat taps of the same tile within this many seconds are logged but not sent; 0 disables.</summary>
@@ -59,6 +61,12 @@ public sealed class AppSettings
     /// <summary>Exact resolution of the 7" touch panel, used to find it when 3 displays are attached (TODO #8).</summary>
     public Size TouchScreenSize { get; init; } = DefaultTouchScreenSize;
     public IReadOnlyList<TileDefinition> Tiles { get; init; } = DefaultTiles;
+
+    /// <summary>
+    /// TODO #10: true when <see cref="Tiles"/> came from the file (not the built-in defaults). Only then
+    /// do its Colors override the colors of the picture tiles.
+    /// </summary>
+    public bool HasConfiguredTiles { get; init; }
 
     /// <summary>Loads settings from appsettings.json in the app folder.</summary>
     public static AppSettings Load() => Load(DefaultPath);
@@ -94,10 +102,10 @@ public sealed class AppSettings
                 && !string.IsNullOrWhiteSpace(u.GetString()))
                 urls = [u.GetString()!.Trim()];
 
-            // Columns: a positive integer.
+            // Columns: 0 = automatic (TODO #10), or a positive integer.
             var columns = DefaultColumns;
             if (root.TryGetProperty("Columns", out var c) && c.ValueKind == JsonValueKind.Number
-                && c.TryGetInt32(out var n) && n > 0)
+                && c.TryGetInt32(out var n) && n >= 0)
                 columns = n;
 
             // DebounceSeconds: a number >= 0 (0 turns debouncing off).
@@ -116,7 +124,12 @@ public sealed class AppSettings
                     touchSize = new Size(tw, th);
             }
 
-            return new AppSettings { ListenerUrls = urls, Columns = columns, DebounceSeconds = debounce, TouchScreenSize = touchSize, Tiles = ReadTiles(root) };
+            var tiles = ReadTiles(root);
+            return new AppSettings
+            {
+                ListenerUrls = urls, Columns = columns, DebounceSeconds = debounce, TouchScreenSize = touchSize,
+                Tiles = tiles, HasConfiguredTiles = !ReferenceEquals(tiles, DefaultTiles)
+            };
         }
         catch
         {

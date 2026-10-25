@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Project: PECSCommunicator
  * File: MainForm.cs
  * This file now encoded in UTF-8.
@@ -20,7 +20,8 @@
  * [x] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
  * [x] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [x] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
- * 
+ * [x] 10. Make the number of tiles/buttons dynamic by reading the .png files in the Resources folder and using their names as the labels. (The color can be a default or derived from the image.)
+ * [ ] 11. Create a REAMDE.md with instructions for building and running the Communicator and Listener on different computers, including network configuration and firewall settings as necessary. Include the toush screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
  */
 
 namespace PECSCommunicator;
@@ -63,6 +64,7 @@ public partial class MainForm : Form
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += onDisplayChange;
         FormClosed += (_, _) => Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= onDisplayChange;
         SetupPECSTiles();
+        WatchTileFolder();   // TODO #10: live reload when Resources changes
         SetupOverlay();
 
         _cornerHold = new CornerHoldGesture(this, new Size(80, 80), TimeSpan.FromSeconds(3));
@@ -146,7 +148,7 @@ public partial class MainForm : Form
     /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URLs now.</summary>
     private void OpenSettings()
     {
-        using var dlg = new SettingsForm(Settings.ListenerUrls, _linkStatusText, _placementText);
+        using var dlg = new SettingsForm(Settings.ListenerUrls, _linkStatusText, _placementText, reloadTiles: SetupPECSTiles);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         try
@@ -166,15 +168,43 @@ public partial class MainForm : Form
         }
     }
 
-    /// <summary>Builds the tile grid from the configured tiles and column count.</summary>
-    private void SetupPECSTiles()
+    // TODO #10: the tiles come from the numbered pictures in Resources (see TileCatalog) and are
+    // rebuilt when that folder changes, or from Settings > "Reload tiles".
+    private TileFolderWatcher? _tileWatcher;
+
+    /// <summary>Watches Resources; a settled change rebuilds the grid on the UI thread.</summary>
+    private void WatchTileFolder()
     {
-        var tiles = Settings.Tiles;
-        int columns = Math.Min(Settings.Columns, tiles.Count);
+        _tileWatcher = new TileFolderWatcher(TileCatalog.DefaultFolder, TimeSpan.FromSeconds(1));
+        _tileWatcher.Changed += (_, _) =>
+        {
+            // Called on a thread-pool thread; the form may be closing.
+            if (IsDisposed || !IsHandleCreated) return;
+            try { BeginInvoke(() => SetupPECSTiles()); }
+            catch (InvalidOperationException) { /* handle destroyed while closing */ }
+        };
+        FormClosed += (_, _) => _tileWatcher.Dispose();
+    }
+
+    /// <summary>
+    /// Builds (or rebuilds) the tile grid from the Resources folder and the column setting.
+    /// Returns a one-line summary (shown in Settings after "Reload tiles").
+    /// </summary>
+    private string SetupPECSTiles()
+    {
+        var set = TileCatalog.Load(TileCatalog.DefaultFolder, Settings);
+        var tiles = set.Tiles;
+        int columns = TileCatalog.ColumnsFor(tiles.Count, Settings.Columns);
         int rows = (int)Math.Ceiling((double)tiles.Count / columns);
 
         tableLayoutPanel1.SuspendLayout();
+
+        // Remove and dispose the old tiles (TileButton disposes its picture). Controls.Clear alone
+        // would leak them on every reload.
+        var oldTiles = tableLayoutPanel1.Controls.Cast<Control>().ToList();
         tableLayoutPanel1.Controls.Clear();
+        foreach (var old in oldTiles) old.Dispose();
+
         tableLayoutPanel1.Dock = DockStyle.Fill;
         tableLayoutPanel1.Padding = new Padding(20);
 
@@ -191,33 +221,31 @@ public partial class MainForm : Form
         for (int i = 0; i < tiles.Count; i++)
         {
             var tile = tiles[i];
-            // Owner-drawn tile: picture with label beneath, or big text if no usable image.
+            // Owner-drawn tile: picture with label beneath, or big text if no usable picture.
             var btn = new TileButton
             {
                 Text = tile.Label,
                 Font = new Font("Segoe UI", 72, FontStyle.Bold),
-                BackColor = tile.ResolveColor(),
+                BackColor = tile.Color,
                 Dock = DockStyle.Fill,
                 Margin = new Padding(15),
                 FlatStyle = FlatStyle.Flat,
                 Tag = tile.Label,
-                Picture = LoadTileImage(tile.Image)
+                Picture = tile.Picture   // the button now owns the picture
             };
             btn.Click += Tile_Click;
             tableLayoutPanel1.Controls.Add(btn, i % columns, i / columns);
         }
 
         tableLayoutPanel1.ResumeLayout();
-    }
+        tableLayoutPanel1.Invalidate();   // repaint the status dot too
 
-    /// <summary>
-    /// Loads a tile picture from the Resources folder next to the exe.
-    /// Returns null (text-only tile) if the name is empty or the file is missing or unreadable.
-    /// </summary>
-    private static Image? LoadTileImage(string? fileName)
-    {
-        if (string.IsNullOrWhiteSpace(fileName)) return null;
-        return TileButton.TryLoadPicture(Path.Combine(AppContext.BaseDirectory, "Resources", fileName.Trim()));
+        // Forget debounce times of tiles that are gone, so a re-added tile starts fresh.
+        var labels = tiles.Select(t => t.Label).ToHashSet();
+        foreach (var gone in _lastSentAt.Keys.Where(k => !labels.Contains(k)).ToList())
+            _lastSentAt.Remove(gone);
+
+        return $"{tiles.Count} tile(s) from {set.Origin}, grid {columns}x{rows}";
     }
 
     private void SetupOverlay()

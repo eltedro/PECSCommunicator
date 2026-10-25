@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 namespace PECSCommunicator;
@@ -24,6 +24,11 @@ static class Program
         // Extra arguments are additional URLs for this run only, e.g. a bogus one to test a down listener.
         if (args.Length > 0 && args[0] == "--selftest-send")
             return MainForm.RunSendSelfTest(args.Skip(1));
+
+        // TODO #10: print the tiles, colors and grid a folder produces (default Resources); with a
+        // second argument, keep watching that many seconds and print again after each change. No UI, no mutex.
+        if (args.Length > 0 && args[0] == "--selftest-tiles")
+            return TileSelfTest.Run(args.Skip(1));
 
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool isFirstInstance);
         if (!isFirstInstance)
