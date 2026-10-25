@@ -45,13 +45,13 @@ public sealed class AppSettings
         new TileDefinition("Help", "LightYellow"),
     };
 
-    public string ListenerUrl { get; init; } = DefaultListenerUrl;
+    // Mutable so the Settings screen can apply a new URL without a restart.
+    public string ListenerUrl { get; set; } = DefaultListenerUrl;
     public int Columns { get; init; } = DefaultColumns;
     public IReadOnlyList<TileDefinition> Tiles { get; init; } = DefaultTiles;
 
     /// <summary>Loads settings from appsettings.json in the app folder.</summary>
-    public static AppSettings Load() =>
-        Load(Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
+    public static AppSettings Load() => Load(DefaultPath);
 
     /// <summary>Loads settings from <paramref name="path"/>, falling back to defaults per value.</summary>
     public static AppSettings Load(string path)
@@ -108,4 +108,39 @@ public sealed class AppSettings
 
     private static string GetString(JsonElement obj, string name) =>
         obj.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() ?? "" : "";
+
+    /// <summary>Full path of the appsettings.json next to the exe.</summary>
+    public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "appsettings.json");
+
+    /// <summary>
+    /// Writes a new ListenerUrl into appsettings.json, keeping every other setting.
+    /// If the file already has a "ListenerUrl" string, only that value is replaced in the text,
+    /// so comments and formatting survive. Otherwise the file is parsed (comments skipped)
+    /// and rewritten indented with the new value; comments are lost in that case only.
+    /// </summary>
+    public static void SaveListenerUrl(string path, string url)
+    {
+        var encoded = System.Text.Json.JsonSerializer.Serialize(url); // quoted + escaped JSON string
+
+        if (File.Exists(path))
+        {
+            var text = File.ReadAllText(path);
+            var pattern = new System.Text.RegularExpressions.Regex("(\"ListenerUrl\"\\s*:\\s*)\"(?:[^\"\\\\]|\\\\.)*\"");
+            if (pattern.IsMatch(text))
+            {
+                File.WriteAllText(path, pattern.Replace(text, m => m.Groups[1].Value + encoded, 1));
+                return;
+            }
+
+            var options = new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
+            var node = System.Text.Json.Nodes.JsonNode.Parse(text, documentOptions: options) as System.Text.Json.Nodes.JsonObject
+                       ?? new System.Text.Json.Nodes.JsonObject();
+            node["ListenerUrl"] = url;
+            File.WriteAllText(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+            return;
+        }
+
+        var fresh = new System.Text.Json.Nodes.JsonObject { ["ListenerUrl"] = url };
+        File.WriteAllText(path, fresh.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    }
 }

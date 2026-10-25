@@ -13,7 +13,7 @@
  * [x] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
  * [x] 1. move tile definitions (label, color, image file) into appsettings.json so tiles change without a rebuild
  * [x] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
- * [ ] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
+ * [x] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
  * [ ] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
  * [ ] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
  * [ ] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
@@ -39,11 +39,47 @@ public partial class MainForm : Form
 
     private Label? _overlayLabel;
 
+    // Hidden adult access: hold the top-left 80x80 px corner for 3 seconds.
+    private readonly CornerHoldGesture _cornerHold;
+
     public MainForm()
     {
         InitializeComponent();
         SetupPECSTiles();
         SetupOverlay();
+
+        _cornerHold = new CornerHoldGesture(this, new Size(80, 80), TimeSpan.FromSeconds(3));
+        _cornerHold.HoldCompleted += (_, _) => BeginInvoke(OpenSettings);
+        FormClosed += (_, _) => _cornerHold.Dispose(); // remove the app-wide message filter
+    }
+
+    /// <summary>Keyboard shortcut for adults: Ctrl+Shift+S opens Settings.</summary>
+    protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
+    {
+        if (keyData == (Keys.Control | Keys.Shift | Keys.S))
+        {
+            OpenSettings();
+            return true;
+        }
+        return base.ProcessCmdKey(ref msg, keyData);
+    }
+
+    /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URL now.</summary>
+    private void OpenSettings()
+    {
+        using var dlg = new SettingsForm(Settings.ListenerUrl);
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            AppSettings.SaveListenerUrl(AppSettings.DefaultPath, dlg.ListenerUrl);
+            Settings.ListenerUrl = dlg.ListenerUrl; // takes effect on the next tap
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Could not save settings:\n" + ex.Message, "PECS Settings",
+                MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
     }
 
     /// <summary>Builds the tile grid from the configured tiles and column count.</summary>
@@ -119,6 +155,9 @@ public partial class MainForm : Form
     private async void Tile_Click(object? sender, EventArgs e)
     {
         if (sender is not Button btn || btn.Tag is not string label) return;
+
+        // Releasing a completed corner hold must not count as a tap.
+        if (_cornerHold.ShouldSuppressClick) return;
 
         // Fire-and-forget notification to the listener
         _ = NotifyListenerAsync(label);
