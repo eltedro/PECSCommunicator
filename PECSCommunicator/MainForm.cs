@@ -21,7 +21,7 @@
  * [x] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [x] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * [x] 10. Make the number of tiles/buttons dynamic by reading the .png files in the Resources folder and using their names as the labels. (The color can be a default or derived from the image.)
- * [ ] 11. Create a REAMDE.md with instructions for building and running the Communicator and Listener on different computers, including network configuration and firewall settings as necessary. Include the toush screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
+ * [ ] 11. Create a REAMDE.md with instructions for running the Communicator and Listener on different platforms, including network configuration and firewall settings as necessary. Include the touch screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
  */
 
 namespace PECSCommunicator;
