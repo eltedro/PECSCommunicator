@@ -1,3 +1,6 @@
+using System.Net.Http;
+using System.Text;
+
 namespace PECSCommunicator;
 
 public partial class MainForm : Form
@@ -60,28 +63,47 @@ public partial class MainForm : Form
         _overlayLabel.BringToFront();
     }
 
+    private static readonly HttpClient _httpClient = new HttpClient();
+    private const string ListenerUrl = "http://192.168.0.231:5050/pecs";   // change to the IP of the PC running the listener
+
     private async void Tile_Click(object? sender, EventArgs e)
     {
         if (sender is not Button btn || btn.Tag is not string label) return;
 
-        System.Media.SystemSounds.Asterisk.Play();
+        // Fire-and-forget notification to the listener
+        _ = NotifyListenerAsync(label);
 
-        // Brief highlight on the button
         var originalColor = btn.BackColor;
         btn.BackColor = Color.White;
         await Task.Delay(150);
         btn.BackColor = originalColor;
 
-        // Show overlay
         if (_overlayLabel != null)
         {
             _overlayLabel.Text = $"{label}\nSent!";
             _overlayLabel.Visible = true;
-            await Task.Delay(1200);
+            await Task.Delay(1000);
             _overlayLabel.Visible = false;
         }
 
-        // TODO Stage 3: actual messaging here
-        // Debug.WriteLine($"Would send: {label}");
+        // System.Media.SystemSounds.Asterisk.Play();
     }
+
+    private async Task NotifyListenerAsync(string tile)
+    {
+        try
+        {
+            var content = new StringContent(
+                $"{{\"tile\":\"{tile}\",\"time\":\"{DateTime.Now:yyyy-MM-dd HH:mm:ss}\"}}",
+                Encoding.UTF8,
+                "application/json");
+
+            await _httpClient.PostAsync(ListenerUrl, content);
+        }
+        catch
+        {
+            // Silent fail – we don’t want to interrupt Ian
+        }
+    }
+
 }
