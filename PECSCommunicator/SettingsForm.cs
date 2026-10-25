@@ -24,7 +24,7 @@ public sealed class SettingsForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         Font = new Font("Segoe UI", 18);
-        ClientSize = new Size(820, 300);
+        ClientSize = new Size(820, 340);
         Padding = new Padding(24);
 
         var layout = new TableLayoutPanel
@@ -78,6 +78,18 @@ public sealed class SettingsForm : Form
         layout.Controls.Add(_errorLabel, 0, 2);
         layout.Controls.Add(buttons, 0, 3);
         Controls.Add(layout);
+
+        // TODO #6: small link to the CSV press logs, below the buttons.
+        var logsLink = new LinkLabel
+        {
+            Text = "Open log folder",
+            Dock = DockStyle.Bottom,
+            Height = 34,
+            Font = new Font("Segoe UI", 12),
+            TextAlign = ContentAlignment.MiddleRight
+        };
+        logsLink.LinkClicked += (_, _) => CsvLog.OpenFolder();
+        Controls.Add(logsLink);
 
         AcceptButton = save;
         CancelButton = cancel;

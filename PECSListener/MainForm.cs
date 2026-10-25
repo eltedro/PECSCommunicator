@@ -62,7 +62,21 @@ public partial class MainForm : Form
             BorderStyle = BorderStyle.None
         };
 
+        // TODO #6: small, unobtrusive link to the CSV logs.
+        var logsLink = new LinkLabel
+        {
+            Text = "Open log folder",
+            Dock = DockStyle.Bottom,
+            Height = 24,
+            TextAlign = ContentAlignment.MiddleRight,
+            Padding = new Padding(0, 0, 10, 0),
+            LinkColor = Color.Gray,
+            ActiveLinkColor = Color.White
+        };
+        logsLink.LinkClicked += (_, _) => CsvLog.OpenFolder();
+
         Controls.Add(_logList);
+        Controls.Add(logsLink);
         Controls.Add(_eventLabel);
         Controls.Add(_statusLabel);
     }
@@ -147,6 +161,9 @@ public partial class MainForm : Form
                 using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
                     body = await reader.ReadToEndAsync();
 
+                // TODO #6: log the press (off the UI thread) before showing it.
+                LogPress(body, request.RemoteEndPoint?.Address.ToString() ?? "");
+
                 // Respond immediately
                 context.Response.StatusCode = 200;
                 context.Response.Close();
@@ -157,6 +174,26 @@ public partial class MainForm : Form
             }
             catch { /* ignore transient errors */ }
         }
+    }
+
+    // TODO #6: every received press (POST only; health-check GETs are not logged)
+    // goes to %LOCALAPPDATA%\PECS\Logs\listener-yyyy-MM-dd.csv.
+    private static readonly CsvLog _pressLog = new("listener", "ReceivedAt", "SentAt", "Tile", "FromIp");
+
+    /// <summary>Logs one received press; a body that isn't valid press JSON is logged as "(unparseable)".</summary>
+    private static void LogPress(string body, string fromIp)
+    {
+        string tile = "(unparseable)", sentAt = "";
+        try
+        {
+            using var doc = JsonDocument.Parse(body);
+            var root = doc.RootElement;
+            tile = root.GetProperty("tile").GetString() ?? "(unparseable)";
+            sentAt = root.TryGetProperty("time", out var t) ? t.GetString() ?? "" : "";
+        }
+        catch { /* keep the "(unparseable)" defaults */ }
+
+        _pressLog.Append(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"), sentAt, tile, fromIp);
     }
 
     private void HandleIncoming(string json)

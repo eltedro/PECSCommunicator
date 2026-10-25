@@ -16,7 +16,7 @@
  * [x] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
  * [x] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
  * [x] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
- * [ ] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
+ * [x] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
  * [ ] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
  * [ ] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [ ] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
@@ -235,11 +235,26 @@ public partial class MainForm : Form
         // System.Media.SystemSounds.Asterisk.Play();
     }
 
-    /// <summary>Sends the press (with one retry inside ListenerClient) and updates the dot from the final outcome.</summary>
+    // TODO #6: every press goes to %LOCALAPPDATA%\PECS\Logs\communicator-yyyy-MM-dd.csv.
+    // Outcome values: Sent, SentAfterRetry, Failed. Reserved for TODO #7 (debounce):
+    // a tap swallowed by the debounce is logged with Outcome=Suppressed and Suppressed=true.
+    private static readonly CsvLog _pressLog =
+        new("communicator", "PressedAt", "Tile", "Outcome", "Suppressed", "Detail", "ListenerUrl");
+
+    /// <summary>
+    /// Sends the press (with one retry inside ListenerClient), updates the dot from the final outcome,
+    /// and logs the press once the outcome is known.
+    /// </summary>
     private async Task NotifyListenerAsync(string tile)
     {
+        var pressedAt = DateTime.Now;
+        var url = Settings.ListenerUrl; // capture: Settings may change while the send is in flight
+
         // Never throws: failures only turn the dot red; Ian's feedback is unaffected.
-        var result = await ListenerClient.SendPressAsync(Settings.ListenerUrl, tile);
+        var result = await ListenerClient.SendPressAsync(url, tile, pressedAt);
         SetLinkState(result, "Send");
+
+        var outcome = !result.Ok ? "Failed" : result.Retried ? "SentAfterRetry" : "Sent";
+        _pressLog.Append(pressedAt.ToString("yyyy-MM-dd HH:mm:ss.fff"), tile, outcome, false, result.Message, url);
     }
 }

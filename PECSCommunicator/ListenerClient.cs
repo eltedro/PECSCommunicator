@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace PECSCommunicator;
 
 /// <summary>Outcome of talking to PECSListener: success flag plus a plain-language reason.</summary>
-public sealed record ListenerResult(bool Ok, string Message);
+public sealed record ListenerResult(bool Ok, string Message, bool Retried = false);
 
 /// <summary>
 /// All HTTP traffic to PECSListener in one place:
@@ -23,19 +23,19 @@ public static class ListenerClient
 
     /// <summary>
     /// Sends a tile press. If it fails (no connection or a non-2xx reply) it waits ~1 s and tries once more.
-    /// Never throws; the result reflects the final attempt.
+    /// Never throws; the result reflects the final attempt (Retried tells the CSV log a retry happened).
     /// </summary>
-    public static async Task<ListenerResult> SendPressAsync(string url, string tile)
+    public static async Task<ListenerResult> SendPressAsync(string url, string tile, DateTime pressedAt)
     {
         // Same timestamp on both attempts: it is the time Ian pressed, not the time it arrived.
-        var json = JsonSerializer.Serialize(new { tile, time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
+        var json = JsonSerializer.Serialize(new { tile, time = pressedAt.ToString("yyyy-MM-dd HH:mm:ss") });
 
         var result = await PostOnceAsync(url, json);
         if (result.Ok) return result;
 
         await Task.Delay(RetryDelay);
         var retry = await PostOnceAsync(url, json);
-        return retry.Ok ? retry with { Message = retry.Message + " (after retry)" } : retry;
+        return retry with { Retried = true, Message = retry.Ok ? retry.Message + " (after retry)" : retry.Message };
     }
 
     private static async Task<ListenerResult> PostOnceAsync(string url, string json)
