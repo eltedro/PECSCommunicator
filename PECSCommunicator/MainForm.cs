@@ -18,7 +18,7 @@
  * [x] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
  * [x] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
  * [x] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
- * [ ] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
+ * [x] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [ ] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * 
  */
@@ -47,9 +47,20 @@ public partial class MainForm : Form
     // Hidden adult access: hold the top-left 80x80 px corner for 3 seconds.
     private readonly CornerHoldGesture _cornerHold;
 
+    // TODO #8: where the window was put (shown in Settings). See ScreenPlacement.
+    private string _placementText = "";
+
     public MainForm()
     {
         InitializeComponent();
+
+        // TODO #8: full screen on the 7" panel when 3 displays are attached, else a 1024x600 window.
+        // Re-run when displays change (e.g. the panel is plugged in late). SystemEvents is static,
+        // so the handler must be removed on close to avoid a leak.
+        _placementText = ScreenPlacement.Apply(this, Settings.TouchScreenSize);
+        EventHandler onDisplayChange = (_, _) => BeginInvoke(() => _placementText = ScreenPlacement.Apply(this, Settings.TouchScreenSize));
+        Microsoft.Win32.SystemEvents.DisplaySettingsChanged += onDisplayChange;
+        FormClosed += (_, _) => Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= onDisplayChange;
         SetupPECSTiles();
         SetupOverlay();
 
@@ -124,13 +135,17 @@ public partial class MainForm : Form
     /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URL now.</summary>
     private void OpenSettings()
     {
-        using var dlg = new SettingsForm(Settings.ListenerUrl, _linkStatusText);
+        using var dlg = new SettingsForm(Settings.ListenerUrl, _linkStatusText, _placementText);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         try
         {
             AppSettings.SaveListenerUrl(AppSettings.DefaultPath, dlg.ListenerUrl);
             Settings.ListenerUrl = dlg.ListenerUrl; // takes effect on the next tap
+
+            // TODO #8: only touch the registry when the checkbox actually changed.
+            if (dlg.StartWithWindows != AutoStart.IsEnabled)
+                AutoStart.SetEnabled(dlg.StartWithWindows);
         }
         catch (Exception ex)
         {

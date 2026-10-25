@@ -9,11 +9,15 @@ public sealed class SettingsForm : Form
     private readonly TextBox _urlBox;
     private readonly Label _errorLabel;
     private readonly Button _testButton;
+    private readonly CheckBox _autoStartBox;
+
+    /// <summary>State of "Start with Windows"; applied by the caller after Save (TODO #8).</summary>
+    public bool StartWithWindows => _autoStartBox.Checked;
 
     /// <summary>The validated URL after the user presses Save.</summary>
     public string ListenerUrl { get; private set; }
 
-    public SettingsForm(string currentUrl, string? lastStatus = null)
+    public SettingsForm(string currentUrl, string? lastStatus = null, string? placement = null)
     {
         ListenerUrl = currentUrl;
 
@@ -24,7 +28,7 @@ public sealed class SettingsForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         Font = new Font("Segoe UI", 18);
-        ClientSize = new Size(820, 340);
+        ClientSize = new Size(820, 440);
         Padding = new Padding(24);
 
         var layout = new TableLayoutPanel
@@ -90,6 +94,27 @@ public sealed class SettingsForm : Form
         };
         logsLink.LinkClicked += (_, _) => CsvLog.OpenFolder();
         Controls.Add(logsLink);
+
+        // TODO #8: auto-start checkbox (current state read from the registry) and the display placement line.
+        _autoStartBox = new CheckBox
+        {
+            Text = "Start with Windows",
+            Checked = AutoStart.IsEnabled,
+            Dock = DockStyle.Bottom,
+            Height = 44,
+            Font = new Font("Segoe UI", 14)
+        };
+        Controls.Add(_autoStartBox);
+
+        var placementLabel = new Label
+        {
+            Text = string.IsNullOrEmpty(placement) ? "" : "Display: " + placement,
+            Dock = DockStyle.Bottom,
+            Height = 34,
+            Font = new Font("Segoe UI", 12),
+            ForeColor = Color.DimGray
+        };
+        Controls.Add(placementLabel);
 
         AcceptButton = save;
         CancelButton = cancel;

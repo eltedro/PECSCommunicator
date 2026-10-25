@@ -36,6 +36,7 @@ public sealed class AppSettings
     public const string DefaultListenerUrl = "http://localhost:5050/pecs";
     public const int DefaultColumns = 2;
     public const double DefaultDebounceSeconds = 2;
+    public static readonly Size DefaultTouchScreenSize = new(1024, 600);
 
     /// <summary>The original four tiles, used when the file has none.</summary>
     public static readonly IReadOnlyList<TileDefinition> DefaultTiles = new[]
@@ -52,6 +53,9 @@ public sealed class AppSettings
 
     /// <summary>Repeat taps of the same tile within this many seconds are logged but not sent; 0 disables.</summary>
     public double DebounceSeconds { get; init; } = DefaultDebounceSeconds;
+
+    /// <summary>Exact resolution of the 7" touch panel, used to find it when 3 displays are attached (TODO #8).</summary>
+    public Size TouchScreenSize { get; init; } = DefaultTouchScreenSize;
     public IReadOnlyList<TileDefinition> Tiles { get; init; } = DefaultTiles;
 
     /// <summary>Loads settings from appsettings.json in the app folder.</summary>
@@ -90,7 +94,17 @@ public sealed class AppSettings
                 && db.TryGetDouble(out var secs) && secs >= 0)
                 debounce = secs;
 
-            return new AppSettings { ListenerUrl = url, Columns = columns, DebounceSeconds = debounce, Tiles = ReadTiles(root) };
+            // TouchScreenSize: "WIDTHxHEIGHT", e.g. "1024x600".
+            var touchSize = DefaultTouchScreenSize;
+            if (root.TryGetProperty("TouchScreenSize", out var ts) && ts.ValueKind == JsonValueKind.String)
+            {
+                var parts = (ts.GetString() ?? "").ToLowerInvariant().Split('x');
+                if (parts.Length == 2 && int.TryParse(parts[0].Trim(), out var tw) && int.TryParse(parts[1].Trim(), out var th)
+                    && tw > 0 && th > 0)
+                    touchSize = new Size(tw, th);
+            }
+
+            return new AppSettings { ListenerUrl = url, Columns = columns, DebounceSeconds = debounce, TouchScreenSize = touchSize, Tiles = ReadTiles(root) };
         }
         catch
         {
