@@ -32,7 +32,11 @@ public class ListenerService : Service
     /// <summary>Running / stopped / error changed.</summary>
     public static event Action? StateChanged;
 
+    /// <summary>Alert options (TODO #3), loaded when the service starts; the activity uses them for banner colors.</summary>
+    public static ListenerSettings Settings { get; private set; } = new();
+
     private PecsHttpServer? _server;
+    private PressAlert? _alert;
     private PowerManager.WakeLock? _wakeLock;
     private WifiManager.WifiLock? _wifiLock;
 
@@ -70,10 +74,14 @@ public class ListenerService : Service
 
     private void StartServer()
     {
+        Settings = ListenerSettings.Load(this);
+        _alert = new PressAlert(this, Settings);
+
         var server = new PecsHttpServer($"{Build.Manufacturer} {Build.Model}");
         server.PressReceived += (tile, time, from) =>
         {
             LastPress = (tile, time, DateTime.Now);
+            _alert?.OnPress(tile);   // TODO #3: sound, speech, vibration, heads-up notification
             PressReceived?.Invoke(tile, time, from);
         };
         server.HealthChecked += from => HealthChecked?.Invoke(from);
@@ -142,6 +150,8 @@ public class ListenerService : Service
     {
         _server?.Dispose();
         _server = null;
+        _alert?.Dispose();
+        _alert = null;
         IsRunning = false;
         if (_wakeLock?.IsHeld == true) _wakeLock.Release();
         if (_wifiLock?.IsHeld == true) _wifiLock.Release();

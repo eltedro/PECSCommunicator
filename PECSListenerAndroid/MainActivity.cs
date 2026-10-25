@@ -4,7 +4,7 @@
 // [x] 1. Android listener project: embedded HTTP server on port 5050 at /pecs/,
 //        same GET health check / POST press / 405 behavior as the Windows Listener.
 // [x] 2. Always-on foreground service with boot start and battery-optimization prompt.
-// [ ] 3. Alerts: per-tile color banner + high-priority notification, per-tile sound,
+// [x] 3. Alerts: per-tile color banner + high-priority notification, per-tile sound,
 //        TTS "Ian wants {tile}", vibrate.
 // [ ] 4. Log screen + CSV in the same format as the laptop.
 // [ ] 5. Communicator multi-listener: ListenerUrls list with per-listener status / Test Connection.
@@ -119,6 +119,7 @@ public class MainActivity : Activity
     private void ShowPress(string tile, string time, DateTime received)
     {
         _bannerText.Text = $"Ian pressed: {tile}";
+        _bannerText.SetBackgroundColor(ListenerService.Settings.BannerColorFor(tile));   // TODO #3: tile color
         _timeText.Text = string.IsNullOrEmpty(time) ? $"received {received:HH:mm:ss}" : $"sent {time}, received {received:HH:mm:ss}";
     }
 

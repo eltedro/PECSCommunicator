@@ -10,6 +10,8 @@
   <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
   <uses-permission android:name="android.permission.WAKE_LOCK" />
   <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+  <!-- TODO #3: short buzz on each press. -->
+  <uses-permission android:name="android.permission.VIBRATE" />
 
   <application android:label="PECS Listener" android:supportsRtl="true">
 
