@@ -1,6 +1,4 @@
-﻿using System.Net.Http;
-
-namespace PECSCommunicator;
+﻿namespace PECSCommunicator;
 
 /// <summary>
 /// Hidden adult settings dialog (opened by a 3-second corner hold or Ctrl+Shift+S).
@@ -15,7 +13,7 @@ public sealed class SettingsForm : Form
     /// <summary>The validated URL after the user presses Save.</summary>
     public string ListenerUrl { get; private set; }
 
-    public SettingsForm(string currentUrl)
+    public SettingsForm(string currentUrl, string? lastStatus = null)
     {
         ListenerUrl = currentUrl;
 
@@ -51,7 +49,8 @@ public sealed class SettingsForm : Form
         };
         _urlBox.TextChanged += (_, _) => _errorLabel!.Text = "";
 
-        _errorLabel = new Label { AutoSize = true, ForeColor = Color.Firebrick, Text = "" };
+        // Status line: starts with the main screen's last connection status (TODO #5), then shows test/validation results.
+        _errorLabel = new Label { AutoSize = true, Font = new Font("Segoe UI", 14), ForeColor = Color.DimGray, Text = lastStatus is null ? "" : "Last status: " + lastStatus };
 
         // Button row, right-aligned. Large targets for touch.
         var buttons = new FlowLayoutPanel
@@ -98,9 +97,6 @@ public sealed class SettingsForm : Form
         && !string.IsNullOrEmpty(uri.Host);
 
 
-    // Separate client with a short timeout so a test never hangs the dialog for long.
-    private static readonly HttpClient _testClient = new() { Timeout = TimeSpan.FromSeconds(3) };
-
     /// <summary>Shows a status line under the URL box: green for success, red for problems.</summary>
     private void ShowStatus(string text, bool ok)
     {
@@ -109,8 +105,8 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// Sends a GET to the URL in the box and checks the reply really comes from PECSListener
-    /// ({"status":"ok","app":"PECSListener",...}). Runs async so the dialog stays responsive.
+    /// Checks the URL in the box (without saving it) using the shared health check.
+    /// Runs async so the dialog stays responsive.
     /// </summary>
     private async void TestButton_Click(object? sender, EventArgs e)
     {
@@ -123,52 +119,10 @@ public sealed class SettingsForm : Form
 
         _testButton.Enabled = false;
         ShowStatus("Testing...", ok: true);
-        try
-        {
-            var machine = await TestConnectionAsync(url);
-            if (machine != null)
-                ShowStatus($"Connected to PECSListener on {machine}", ok: true);
-            else
-                ShowStatus("Wrong response: that isn't PECSListener.", ok: false);
-        }
-        catch (TaskCanceledException)
-        {
-            ShowStatus("Timed out: no answer within 3 seconds.", ok: false);
-        }
-        catch (HttpRequestException ex) when (ex.InnerException is System.Net.Sockets.SocketException se)
-        {
-            ShowStatus(se.SocketErrorCode == System.Net.Sockets.SocketError.ConnectionRefused
-                ? "Refused: Listener not running on that port."
-                : $"Could not connect ({se.SocketErrorCode}).", ok: false);
-        }
-        catch (Exception ex)
-        {
-            ShowStatus("Test failed: " + ex.Message, ok: false);
-        }
-        finally
-        {
-            if (!IsDisposed) _testButton.Enabled = true;
-        }
-    }
-
-    /// <summary>Returns the Listener's machine name if the URL answers like PECSListener, else null.</summary>
-    private static async Task<string?> TestConnectionAsync(string url)
-    {
-        using var response = await _testClient.GetAsync(url);
-        if (!response.IsSuccessStatusCode) return null;
-        try
-        {
-            using var doc = System.Text.Json.JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-            var root = doc.RootElement;
-            bool isListener = root.TryGetProperty("status", out var s) && s.GetString() == "ok"
-                           && root.TryGetProperty("app", out var a) && a.GetString() == "PECSListener";
-            if (!isListener) return null;
-            return root.TryGetProperty("machine", out var m) ? m.GetString() ?? "?" : "?";
-        }
-        catch (System.Text.Json.JsonException)
-        {
-            return null; // not JSON, so not our Listener
-        }
+        var result = await ListenerClient.CheckAsync(url);
+        if (IsDisposed) return;
+        ShowStatus(result.Message, result.Ok);
+        _testButton.Enabled = true;
     }
 
     private void Save_Click(object? sender, EventArgs e)

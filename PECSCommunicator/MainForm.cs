@@ -15,16 +15,13 @@
  * [x] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
  * [x] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
  * [x] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
- * [ ] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
+ * [x] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
  * [ ] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
  * [ ] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
  * [ ] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [ ] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * 
  */
-
-using System.Net.Http;
-using System.Text;
 
 namespace PECSCommunicator;
 
@@ -34,10 +31,18 @@ public partial class MainForm : Form
     // so tiles and the listener address can change without a rebuild.
     private static readonly AppSettings Settings = AppSettings.Load();
 
-    // Short timeout so a missing listener never leaves requests hanging.
-    private static readonly HttpClient _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-
     private Label? _overlayLabel;
+
+    // TODO #5: adult-visible connection dot, drawn in the grid's bottom-right padding.
+    private enum LinkState { Unknown, Ok, Failed }
+    private LinkState _linkState = LinkState.Unknown;
+    private string _linkStatusText = "Not checked yet.";
+    private const int DotSize = 16;   // px; fits inside the 20 px grid padding
+    private const int DotInset = 2;   // px from the bottom-right edge
+
+    // Periodic health check (UI-thread timer; _checking prevents overlapping checks).
+    private readonly System.Windows.Forms.Timer _healthTimer = new() { Interval = 30_000 };
+    private bool _checking;
 
     // Hidden adult access: hold the top-left 80x80 px corner for 3 seconds.
     private readonly CornerHoldGesture _cornerHold;
@@ -51,6 +56,58 @@ public partial class MainForm : Form
         _cornerHold = new CornerHoldGesture(this, new Size(80, 80), TimeSpan.FromSeconds(3));
         _cornerHold.HoldCompleted += (_, _) => BeginInvoke(OpenSettings);
         FormClosed += (_, _) => _cornerHold.Dispose(); // remove the app-wide message filter
+
+        // Health check at startup and every 30 s.
+        tableLayoutPanel1.Paint += DrawStatusDot;
+        _healthTimer.Tick += async (_, _) => await CheckListenerAsync();
+        Shown += async (_, _) => { _healthTimer.Start(); await CheckListenerAsync(); };
+        FormClosed += (_, _) => _healthTimer.Dispose();
+    }
+
+    /// <summary>Runs one health check against the current URL, unless one is already in progress.</summary>
+    private async Task CheckListenerAsync()
+    {
+        if (_checking) return;
+        _checking = true;
+        try
+        {
+            var result = await ListenerClient.CheckAsync(Settings.ListenerUrl);
+            SetLinkState(result, "Check");
+        }
+        finally
+        {
+            _checking = false;
+        }
+    }
+
+    /// <summary>Records the latest outcome (check or send) and repaints the dot.</summary>
+    private void SetLinkState(ListenerResult result, string source)
+    {
+        if (IsDisposed) return;
+        _linkState = result.Ok ? LinkState.Ok : LinkState.Failed;
+        _linkStatusText = $"{source} at {DateTime.Now:HH:mm:ss}: {result.Message}";
+        tableLayoutPanel1.Invalidate(DotBounds());
+    }
+
+    /// <summary>Dot position: bottom-right corner of the grid, inside its padding (never over a tile).</summary>
+    private Rectangle DotBounds()
+    {
+        var c = tableLayoutPanel1.ClientSize;
+        return new Rectangle(c.Width - DotSize - DotInset, c.Height - DotSize - DotInset, DotSize, DotSize);
+    }
+
+    /// <summary>Paints the status dot: gray = unknown, green = last contact OK, red = last contact failed.</summary>
+    private void DrawStatusDot(object? sender, PaintEventArgs e)
+    {
+        var color = _linkState switch
+        {
+            LinkState.Ok => Color.FromArgb(60, 170, 60),
+            LinkState.Failed => Color.FromArgb(200, 40, 40),
+            _ => Color.Gray
+        };
+        e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+        using var brush = new SolidBrush(color);
+        e.Graphics.FillEllipse(brush, DotBounds());
     }
 
     /// <summary>Keyboard shortcut for adults: Ctrl+Shift+S opens Settings.</summary>
@@ -67,7 +124,7 @@ public partial class MainForm : Form
     /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URL now.</summary>
     private void OpenSettings()
     {
-        using var dlg = new SettingsForm(Settings.ListenerUrl);
+        using var dlg = new SettingsForm(Settings.ListenerUrl, _linkStatusText);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         try
@@ -178,18 +235,11 @@ public partial class MainForm : Form
         // System.Media.SystemSounds.Asterisk.Play();
     }
 
+    /// <summary>Sends the press (with one retry inside ListenerClient) and updates the dot from the final outcome.</summary>
     private async Task NotifyListenerAsync(string tile)
     {
-        try
-        {
-            // Serialize properly so tile names with quotes or special characters stay valid JSON.
-            var json = System.Text.Json.JsonSerializer.Serialize(new { tile, time = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") });
-            using var content = new StringContent(json, Encoding.UTF8, "application/json");
-            using var response = await _httpClient.PostAsync(Settings.ListenerUrl, content);
-        }
-        catch
-        {
-            // Silent fail - we don't want to interrupt Ian
-        }
+        // Never throws: failures only turn the dot red; Ian's feedback is unaffected.
+        var result = await ListenerClient.SendPressAsync(Settings.ListenerUrl, tile);
+        SetLinkState(result, "Send");
     }
 }
