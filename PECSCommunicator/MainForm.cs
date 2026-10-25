@@ -12,7 +12,7 @@
  * TODO: 
  * [x] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
  * [x] 1. move tile definitions (label, color, image file) into appsettings.json so tiles change without a rebuild
- * [ ] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
+ * [x] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
  * [ ] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
  * [ ] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
  * [ ] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
@@ -71,7 +71,8 @@ public partial class MainForm : Form
         for (int i = 0; i < tiles.Count; i++)
         {
             var tile = tiles[i];
-            var btn = new Button
+            // Owner-drawn tile: picture with label beneath, or big text if no usable image.
+            var btn = new TileButton
             {
                 Text = tile.Label,
                 Font = new Font("Segoe UI", 72, FontStyle.Bold),
@@ -79,13 +80,24 @@ public partial class MainForm : Form
                 Dock = DockStyle.Fill,
                 Margin = new Padding(15),
                 FlatStyle = FlatStyle.Flat,
-                Tag = tile.Label
+                Tag = tile.Label,
+                Picture = LoadTileImage(tile.Image)
             };
             btn.Click += Tile_Click;
             tableLayoutPanel1.Controls.Add(btn, i % columns, i / columns);
         }
 
         tableLayoutPanel1.ResumeLayout();
+    }
+
+    /// <summary>
+    /// Loads a tile picture from the Resources folder next to the exe.
+    /// Returns null (text-only tile) if the name is empty or the file is missing or unreadable.
+    /// </summary>
+    private static Image? LoadTileImage(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return null;
+        return TileButton.TryLoadPicture(Path.Combine(AppContext.BaseDirectory, "Resources", fileName.Trim()));
     }
 
     private void SetupOverlay()
