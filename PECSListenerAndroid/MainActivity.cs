@@ -7,7 +7,7 @@
 // [x] 3. Alerts: per-tile color banner + high-priority notification, per-tile sound,
 //        TTS "Ian wants {tile}", vibrate.
 // [x] 4. Log screen + CSV in the same format as the laptop.
-// [ ] 5. Communicator multi-listener: ListenerUrls list with per-listener status / Test Connection.
+// [x] 5. Communicator multi-listener: ListenerUrls list with per-listener status / Test Connection.
 // [ ] 6. Fixed IPs: router DHCP reservations + phone "Phone MAC" setting.
 
 using System.Globalization;
@@ -36,6 +36,11 @@ public class MainActivity : Activity
     private TextView _batteryText = null!;
     private TextView _bannerText = null!;
     private TextView _timeText = null!;
+    private Button _startButton = null!;
+
+    // True from when this screen asks the service to start until the service reports a state;
+    // lets the status line say "Starting..." rather than "Listener stopped" in between.
+    private bool _startRequested;
     private LinearLayout _logRows = null!;   // TODO #4: recent presses, newest first
     private const int MaxLogRows = 200;
 
@@ -45,8 +50,26 @@ public class MainActivity : Activity
         Window?.AddFlags(WindowManagerFlags.KeepScreenOn);   // keep visible while open
         SetContentView(BuildLayout());
 
-        ListenerService.Start(this);
         RequestNotificationPermission();   // then the battery prompt, see OnRequestPermissionsResult
+    }
+
+    /// <summary>
+    /// Every time the screen becomes visible (first open AND returning to an existing screen),
+    /// make sure the listener is running. Starting it only in OnCreate meant that after "Stop" in
+    /// the notification, reopening the app resumed the old screen and never restarted the service.
+    /// </summary>
+    protected override void OnStart()
+    {
+        base.OnStart();
+        EnsureServiceRunning();
+    }
+
+    private void EnsureServiceRunning()
+    {
+        if (ListenerService.IsRunning) return;
+        _startRequested = true;
+        Android.Util.Log.Info("PECS", "Screen shown with listener stopped: starting it");
+        ListenerService.Start(this);   // safe to call repeatedly
     }
 
     protected override void OnResume()
@@ -98,6 +121,12 @@ public class MainActivity : Activity
         _statusText.SetTextColor(Color.LightGreen);
         _statusText.TextSize = 16;
         root.AddView(_statusText, fullWidth());
+
+        // Shown only while the listener is stopped (e.g. after "Stop" in the notification
+        // while this screen stayed open).
+        _startButton = new Button(this) { Text = "Start listener", Visibility = ViewStates.Gone };
+        _startButton.Click += (_, _) => { EnsureServiceRunning(); ShowServiceState(); };
+        root.AddView(_startButton, fullWidth());
 
         _batteryText = new TextView(this);
         _batteryText.TextSize = 14;
@@ -152,6 +181,7 @@ public class MainActivity : Activity
 
     private void OnStateChanged() => RunOnUiThread(() =>
     {
+        if (!ListenerService.IsRunning) _startRequested = false;   // service just stopped
         ShowServiceState();
         if (ListenerService.IsRunning) RefreshFromLog();
     });
@@ -217,16 +247,30 @@ public class MainActivity : Activity
 
     private void ShowServiceState()
     {
+        // A state report from the service ends the "Starting..." phase.
+        if (ListenerService.IsRunning || ListenerService.StartError != null) _startRequested = false;
+
         if (ListenerService.StartError is { } error)
         {
             _statusText.SetTextColor(Color.OrangeRed);
             _statusText.Text = error;
         }
-        else
+        else if (ListenerService.IsRunning)
         {
             _statusText.SetTextColor(Color.LightGreen);
-            _statusText.Text = ListenerService.IsRunning ? $"Listening on {NetworkInfo.ListenUrl(this)}" : "Starting...";
+            _statusText.Text = $"Listening on {NetworkInfo.ListenUrl(this)}";
         }
+        else if (_startRequested)
+        {
+            _statusText.SetTextColor(Color.LightGreen);
+            _statusText.Text = "Starting...";
+        }
+        else
+        {
+            _statusText.SetTextColor(Color.OrangeRed);
+            _statusText.Text = "Listener stopped - presses are NOT being received";
+        }
+        _startButton.Visibility = ListenerService.IsRunning ? ViewStates.Gone : ViewStates.Visible;
     }
 
     // ---------- First-run prompts ----------

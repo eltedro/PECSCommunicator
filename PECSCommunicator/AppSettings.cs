@@ -47,8 +47,10 @@ public sealed class AppSettings
         new TileDefinition("Help", "LightYellow"),
     };
 
-    // Mutable so the Settings screen can apply a new URL without a restart.
-    public string ListenerUrl { get; set; } = DefaultListenerUrl;
+    // Android TODO #5: every listener that receives presses (laptop, phone, ...).
+    // Plain URL strings keep the file simple; the URL itself identifies each listener in the status and CSV.
+    // Mutable so the Settings screen can apply a new list without a restart.
+    public IReadOnlyList<string> ListenerUrls { get; set; } = [DefaultListenerUrl];
     public int Columns { get; init; } = DefaultColumns;
 
     /// <summary>Repeat taps of the same tile within this many seconds are logged but not sent; 0 disables.</summary>
@@ -76,11 +78,21 @@ public sealed class AppSettings
             using var doc = JsonDocument.Parse(File.ReadAllText(path), options);
             var root = doc.RootElement;
 
-            // ListenerUrl: any non-blank string.
-            var url = DefaultListenerUrl;
-            if (root.TryGetProperty("ListenerUrl", out var u) && u.ValueKind == JsonValueKind.String
+            // ListenerUrls: array of non-blank strings. Backward compatible: a file with only the
+            // legacy "ListenerUrl" string is read as a one-item list.
+            IReadOnlyList<string> urls = [DefaultListenerUrl];
+            if (root.TryGetProperty("ListenerUrls", out var ua) && ua.ValueKind == JsonValueKind.Array)
+            {
+                var list = ua.EnumerateArray()
+                    .Where(e => e.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(e.GetString()))
+                    .Select(e => e.GetString()!.Trim())
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                if (list.Count > 0) urls = list;
+            }
+            else if (root.TryGetProperty("ListenerUrl", out var u) && u.ValueKind == JsonValueKind.String
                 && !string.IsNullOrWhiteSpace(u.GetString()))
-                url = u.GetString()!.Trim();
+                urls = [u.GetString()!.Trim()];
 
             // Columns: a positive integer.
             var columns = DefaultColumns;
@@ -104,7 +116,7 @@ public sealed class AppSettings
                     touchSize = new Size(tw, th);
             }
 
-            return new AppSettings { ListenerUrl = url, Columns = columns, DebounceSeconds = debounce, TouchScreenSize = touchSize, Tiles = ReadTiles(root) };
+            return new AppSettings { ListenerUrls = urls, Columns = columns, DebounceSeconds = debounce, TouchScreenSize = touchSize, Tiles = ReadTiles(root) };
         }
         catch
         {
@@ -137,34 +149,47 @@ public sealed class AppSettings
     public static string DefaultPath => Path.Combine(AppContext.BaseDirectory, "appsettings.json");
 
     /// <summary>
-    /// Writes a new ListenerUrl into appsettings.json, keeping every other setting.
-    /// If the file already has a "ListenerUrl" string, only that value is replaced in the text,
-    /// so comments and formatting survive. Otherwise the file is parsed (comments skipped)
-    /// and rewritten indented with the new value; comments are lost in that case only.
+    /// Android TODO #5: writes the listener list into appsettings.json as "ListenerUrls", keeping every
+    /// other setting. Only the URL value is replaced in the text, so comments and formatting survive:
+    /// an existing "ListenerUrls" array is replaced, or a legacy "ListenerUrl" string is converted.
+    /// If neither is found the file is parsed (comments skipped) and rewritten indented;
+    /// comments are lost in that case only.
     /// </summary>
-    public static void SaveListenerUrl(string path, string url)
+    public static void SaveListenerUrls(string path, IReadOnlyList<string> urls)
     {
-        var encoded = System.Text.Json.JsonSerializer.Serialize(url); // quoted + escaped JSON string
+        // "ListenerUrls": [ ... ] laid out one URL per line, like the shipped file.
+        var items = string.Join(",\r\n", urls.Select(u => "    " + JsonSerializer.Serialize(u)));
+        var arrayText = "[\r\n" + items + "\r\n  ]";
 
         if (File.Exists(path))
         {
             var text = File.ReadAllText(path);
-            var pattern = new System.Text.RegularExpressions.Regex("(\"ListenerUrl\"\\s*:\\s*)\"(?:[^\"\\\\]|\\\\.)*\"");
-            if (pattern.IsMatch(text))
+            var current = new System.Text.RegularExpressions.Regex("(\"ListenerUrls\"\\s*:\\s*)\\[[^\\]]*\\]");
+            var legacy = new System.Text.RegularExpressions.Regex("\"ListenerUrl\"\\s*:\\s*\"(?:[^\"\\\\]|\\\\.)*\"");
+            if (current.IsMatch(text))
             {
-                File.WriteAllText(path, pattern.Replace(text, m => m.Groups[1].Value + encoded, 1));
+                File.WriteAllText(path, current.Replace(text, m => m.Groups[1].Value + arrayText, 1));
+                return;
+            }
+            if (legacy.IsMatch(text))
+            {
+                File.WriteAllText(path, legacy.Replace(text, _ => "\"ListenerUrls\": " + arrayText, 1));
                 return;
             }
 
             var options = new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true };
             var node = System.Text.Json.Nodes.JsonNode.Parse(text, documentOptions: options) as System.Text.Json.Nodes.JsonObject
                        ?? new System.Text.Json.Nodes.JsonObject();
-            node["ListenerUrl"] = url;
+            node.Remove("ListenerUrl");
+            node["ListenerUrls"] = ToJsonArray(urls);
             File.WriteAllText(path, node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
             return;
         }
 
-        var fresh = new System.Text.Json.Nodes.JsonObject { ["ListenerUrl"] = url };
+        var fresh = new System.Text.Json.Nodes.JsonObject { ["ListenerUrls"] = ToJsonArray(urls) };
         File.WriteAllText(path, fresh.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
+
+    private static System.Text.Json.Nodes.JsonArray ToJsonArray(IReadOnlyList<string> urls) =>
+        new(urls.Select(u => (System.Text.Json.Nodes.JsonNode?)System.Text.Json.Nodes.JsonValue.Create(u)).ToArray());
 }

@@ -59,6 +59,9 @@ public class ListenerService : Service
     {
         if (intent?.Action == ActionStop)
         {
+            // Stop lasts until the app's screen is next shown (MainActivity.OnStart restarts it)
+            // or the phone reboots (BootReceiver).
+            Android.Util.Log.Info("PECS", "Stop requested from the notification");
             StopSelf();
             return StartCommandResult.NotSticky;
         }

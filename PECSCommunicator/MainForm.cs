@@ -34,7 +34,8 @@ public partial class MainForm : Form
     private Label? _overlayLabel;
 
     // TODO #5: adult-visible connection dot, drawn in the grid's bottom-right padding.
-    private enum LinkState { Unknown, Ok, Failed }
+    // Android TODO #5: Partial = some listeners answered, some didn't (amber dot).
+    private enum LinkState { Unknown, Ok, Partial, Failed }
     private LinkState _linkState = LinkState.Unknown;
     private string _linkStatusText = "Not checked yet.";
     private const int DotSize = 16;   // px; fits inside the 20 px grid padding
@@ -82,8 +83,8 @@ public partial class MainForm : Form
         _checking = true;
         try
         {
-            var result = await ListenerClient.CheckAsync(Settings.ListenerUrl);
-            SetLinkState(result, "Check");
+            var outcomes = await ListenerClient.CheckAllAsync(Settings.ListenerUrls);
+            SetLinkState(outcomes, "Check");
         }
         finally
         {
@@ -91,14 +92,23 @@ public partial class MainForm : Form
         }
     }
 
-    /// <summary>Records the latest outcome (check or send) and repaints the dot.</summary>
-    private void SetLinkState(ListenerResult result, string source)
+    /// <summary>
+    /// Records the latest outcome (check or send) for all listeners and repaints the dot:
+    /// green = all OK, amber = some OK, red = none. The text (shown in Settings) has one line per listener.
+    /// </summary>
+    private void SetLinkState(IReadOnlyList<ListenerOutcome> outcomes, string source)
     {
         if (IsDisposed) return;
-        _linkState = result.Ok ? LinkState.Ok : LinkState.Failed;
-        _linkStatusText = $"{source} at {DateTime.Now:HH:mm:ss}: {result.Message}";
+        int ok = outcomes.Count(o => o.Result.Ok);
+        _linkState = ok == outcomes.Count ? LinkState.Ok : ok > 0 ? LinkState.Partial : LinkState.Failed;
+        _linkStatusText = DescribeOutcomes(outcomes, $"{source} at {DateTime.Now:HH:mm:ss}");
         tableLayoutPanel1.Invalidate(DotBounds());
     }
+
+    /// <summary>"Send at 13:05:01: 1 of 2 OK" then one "OK/FAIL  url  message" line per listener.</summary>
+    internal static string DescribeOutcomes(IReadOnlyList<ListenerOutcome> outcomes, string heading) =>
+        $"{heading}: {outcomes.Count(o => o.Result.Ok)} of {outcomes.Count} OK" +
+        string.Concat(outcomes.Select(o => $"\n{(o.Result.Ok ? "OK  " : "FAIL")}  {o.Url}  {o.Result.Message}"));
 
     /// <summary>Dot position: bottom-right corner of the grid, inside its padding (never over a tile).</summary>
     private Rectangle DotBounds()
@@ -107,12 +117,13 @@ public partial class MainForm : Form
         return new Rectangle(c.Width - DotSize - DotInset, c.Height - DotSize - DotInset, DotSize, DotSize);
     }
 
-    /// <summary>Paints the status dot: gray = unknown, green = last contact OK, red = last contact failed.</summary>
+    /// <summary>Paints the status dot: gray = unknown, green = all listeners OK, amber = some, red = none.</summary>
     private void DrawStatusDot(object? sender, PaintEventArgs e)
     {
         var color = _linkState switch
         {
             LinkState.Ok => Color.FromArgb(60, 170, 60),
+            LinkState.Partial => Color.FromArgb(230, 160, 0),
             LinkState.Failed => Color.FromArgb(200, 40, 40),
             _ => Color.Gray
         };
@@ -132,16 +143,17 @@ public partial class MainForm : Form
         return base.ProcessCmdKey(ref msg, keyData);
     }
 
-    /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URL now.</summary>
+    /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URLs now.</summary>
     private void OpenSettings()
     {
-        using var dlg = new SettingsForm(Settings.ListenerUrl, _linkStatusText, _placementText);
+        using var dlg = new SettingsForm(Settings.ListenerUrls, _linkStatusText, _placementText);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         try
         {
-            AppSettings.SaveListenerUrl(AppSettings.DefaultPath, dlg.ListenerUrl);
-            Settings.ListenerUrl = dlg.ListenerUrl; // takes effect on the next tap
+            AppSettings.SaveListenerUrls(AppSettings.DefaultPath, dlg.ListenerUrls);
+            Settings.ListenerUrls = dlg.ListenerUrls; // takes effect on the next tap
+            _ = CheckListenerAsync();                 // refresh the dot for the new list
 
             // TODO #8: only touch the registry when the checkbox actually changed.
             if (dlg.StartWithWindows != AutoStart.IsEnabled)
@@ -241,7 +253,7 @@ public partial class MainForm : Form
 
         var pressedAt = DateTime.Now;
         var pressId = NewPressId();
-        var url = Settings.ListenerUrl; // capture: Settings may change while the send is in flight
+        var urls = Settings.ListenerUrls; // capture: Settings may change while the send is in flight
 
         bool suppressed = Settings.DebounceSeconds > 0
             && _lastSentAt.TryGetValue(label, out var last)
@@ -250,12 +262,12 @@ public partial class MainForm : Form
         // Log first, synchronously (a one-line append), so the tap is on disk even if the app
         // is closed or crashes before the send finishes.
         LogPress(pressId, pressedAt, label, suppressed ? "Suppressed" : "Pressed", suppressed,
-            suppressed ? $"Repeat within {Settings.DebounceSeconds:0.#} s; not sent" : "", url);
+            suppressed ? $"Repeat within {Settings.DebounceSeconds:0.#} s; not sent" : "", string.Join(" ", urls));
 
         if (!suppressed)
         {
             _lastSentAt[label] = pressedAt;
-            _ = NotifyListenerAsync(pressId, pressedAt, label, url); // fire-and-forget; logs its own result
+            _ = NotifyListenerAsync(pressId, pressedAt, label, urls); // fire-and-forget; logs its own results
         }
 
         // Child feedback is the same for sent and suppressed taps, so Ian always gets a consistent
@@ -279,7 +291,9 @@ public partial class MainForm : Form
     // TODO #6/#7: every tap goes to %LOCALAPPDATA%\PECS\Logs\communicator-yyyy-MM-dd.csv as up to two rows
     // sharing PressId, PressedAt, and Tile:
     //   1. at the tap:       Outcome = Pressed (will be sent) or Suppressed (debounced; Suppressed = True)
-    //   2. when send is done: Outcome = Sent, SentAfterRetry, or Failed (Pressed taps only)
+    //   2. when each send is done: Outcome = Sent, SentAfterRetry, or Failed (Pressed taps only)
+    // Android TODO #5: one result row PER LISTENER, its URL in ListenerUrl (the press row lists all
+    // URLs, space-separated). Same columns as before, so existing files need no -N rollover.
     // Result rows of overlapping sends may interleave; PressId pairs them up.
     private static readonly CsvLog _pressLog =
         new("communicator", "PressId", "PressedAt", "Tile", "Outcome", "Suppressed", "Detail", "ListenerUrl");
@@ -289,16 +303,52 @@ public partial class MainForm : Form
         _pressLog.Append(pressId, pressedAt.ToString("yyyy-MM-dd HH:mm:ss.fff"), tile, outcome, suppressed, detail, url);
 
     /// <summary>
-    /// Sends the press (with one retry inside ListenerClient), updates the dot from the final outcome,
-    /// and logs the result row.
+    /// Sends the press to every listener, updates the dot from the outcomes, and logs the result rows.
     /// </summary>
-    private async Task NotifyListenerAsync(string pressId, DateTime pressedAt, string tile, string url)
+    private async Task NotifyListenerAsync(string pressId, DateTime pressedAt, string tile, IReadOnlyList<string> urls)
     {
-        // Never throws: failures only turn the dot red; Ian's feedback is unaffected.
-        var result = await ListenerClient.SendPressAsync(url, tile, pressedAt);
-        SetLinkState(result, "Send");
+        // Never throws: failures only change the dot; Ian's feedback is unaffected.
+        var outcomes = await SendAndLogAsync(pressId, pressedAt, tile, urls);
+        SetLinkState(outcomes, "Send");
+    }
 
-        var outcome = !result.Ok ? "Failed" : result.Retried ? "SentAfterRetry" : "Sent";
-        LogPress(pressId, pressedAt, tile, outcome, false, result.Message, url);
+    /// <summary>
+    /// Android TODO #5: sends to all listeners in parallel (each with its own timeout and retry inside
+    /// ListenerClient) and logs each listener's result row as soon as THAT listener finishes,
+    /// so a slow listener doesn't hold back the others' rows.
+    /// </summary>
+    internal static async Task<ListenerOutcome[]> SendAndLogAsync(string pressId, DateTime pressedAt, string tile, IReadOnlyList<string> urls)
+    {
+        var tasks = urls.Select(async url =>
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var result = await ListenerClient.SendPressAsync(url, tile, pressedAt);
+            var outcome = !result.Ok ? "Failed" : result.Retried ? "SentAfterRetry" : "Sent";
+            LogPress(pressId, pressedAt, tile, outcome, false, result.Message, url);
+            return new ListenerOutcome(url, result, sw.ElapsedMilliseconds);
+        });
+        return await Task.WhenAll(tasks);
+    }
+
+    /// <summary>
+    /// Developer check (--selftest-send [extra URL ...]): sends one "Walk" press to every configured
+    /// listener, plus any extra URLs given for this run only (never saved), logs it like a real tap,
+    /// prints one line per listener, and returns 0 = all OK, 1 = some, 2 = none.
+    /// </summary>
+    internal static int RunSendSelfTest(IEnumerable<string> extraUrls)
+    {
+        var urls = Settings.ListenerUrls.Concat(extraUrls).ToList();
+        var pressedAt = DateTime.Now;
+        var pressId = NewPressId();
+        const string tile = "Walk";
+        LogPress(pressId, pressedAt, tile, "Pressed", false, "selftest-send", string.Join(" ", urls));
+
+        var outcomes = SendAndLogAsync(pressId, pressedAt, tile, urls).GetAwaiter().GetResult();
+        Console.WriteLine($"PressId {pressId}, pressed {pressedAt:HH:mm:ss.fff}");
+        foreach (var o in outcomes)
+            Console.WriteLine($"{(o.Result.Ok ? "OK  " : "FAIL")}  {o.ElapsedMs,5} ms  {o.Url}  {o.Result.Message}");
+        int ok = outcomes.Count(o => o.Result.Ok);
+        Console.WriteLine($"{ok} of {outcomes.Length} OK");
+        return ok == outcomes.Length ? 0 : ok > 0 ? 1 : 2;
     }
 }

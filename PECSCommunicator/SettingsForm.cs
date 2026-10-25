@@ -2,7 +2,9 @@
 
 /// <summary>
 /// Hidden adult settings dialog (opened by a 3-second corner hold or Ctrl+Shift+S).
-/// Large, touch-friendly controls. Currently edits only the listener URL.
+/// Large, touch-friendly controls. Edits the listener list (Android TODO #5: one URL per line).
+/// Sized to fit the 1024x600 touch panel; the status area has a fixed height so long
+/// messages can never push the buttons off the dialog.
 /// </summary>
 public sealed class SettingsForm : Form
 {
@@ -14,12 +16,12 @@ public sealed class SettingsForm : Form
     /// <summary>State of "Start with Windows"; applied by the caller after Save (TODO #8).</summary>
     public bool StartWithWindows => _autoStartBox.Checked;
 
-    /// <summary>The validated URL after the user presses Save.</summary>
-    public string ListenerUrl { get; private set; }
+    /// <summary>The validated listener URLs after the user presses Save.</summary>
+    public IReadOnlyList<string> ListenerUrls { get; private set; }
 
-    public SettingsForm(string currentUrl, string? lastStatus = null, string? placement = null)
+    public SettingsForm(IReadOnlyList<string> currentUrls, string? lastStatus = null, string? placement = null)
     {
-        ListenerUrl = currentUrl;
+        ListenerUrls = currentUrls;
 
         Text = "PECS Settings";
         FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -28,8 +30,8 @@ public sealed class SettingsForm : Form
         ShowInTaskbar = false;
         TopMost = true;
         Font = new Font("Segoe UI", 18);
-        ClientSize = new Size(820, 440);
-        Padding = new Padding(24);
+        ClientSize = new Size(900, 540);   // + title bar stays under the panel's 600 px height
+        Padding = new Padding(24, 16, 24, 8);
 
         var layout = new TableLayoutPanel
         {
@@ -38,23 +40,36 @@ public sealed class SettingsForm : Form
             RowCount = 4
         };
         layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-        layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 104));   // URL list: ~3 lines, scrolls beyond
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 112));   // status: fixed height (see summary)
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
 
-        var urlLabel = new Label { Text = "Listener URL (e.g. http://192.168.4.28:5050/pecs):", AutoSize = true };
+        var urlLabel = new Label { Text = "Listener URLs, one per line (e.g. http://192.168.4.28:5050/pecs):", AutoSize = true, Font = new Font("Segoe UI", 14) };
 
         _urlBox = new TextBox
         {
-            Text = currentUrl,
+            Text = string.Join("\r\n", currentUrls),
+            Multiline = true,
+            AcceptsReturn = true,
+            WordWrap = false,
+            ScrollBars = ScrollBars.Both,
             Dock = DockStyle.Fill,
-            Font = new Font("Segoe UI", 22),
-            Margin = new Padding(0, 8, 0, 8)
+            Font = new Font("Segoe UI", 16),
+            Margin = new Padding(0, 6, 0, 6)
         };
         _urlBox.TextChanged += (_, _) => _errorLabel!.Text = "";
 
-        // Status line: starts with the main screen's last connection status (TODO #5), then shows test/validation results.
-        _errorLabel = new Label { AutoSize = true, Font = new Font("Segoe UI", 14), ForeColor = Color.DimGray, Text = lastStatus is null ? "" : "Last status: " + lastStatus };
+        // Status area: starts with the main screen's last per-listener status (TODO #5), then shows
+        // test/validation results. Fixed size + ellipsis: text that doesn't fit is cut, never the buttons.
+        _errorLabel = new Label
+        {
+            AutoSize = false,
+            AutoEllipsis = true,
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 11),
+            ForeColor = Color.DimGray,
+            Text = lastStatus is null ? "" : "Last status: " + lastStatus
+        };
 
         // Button row, right-aligned. Large targets for touch.
         var buttons = new FlowLayoutPanel
@@ -70,10 +85,9 @@ public sealed class SettingsForm : Form
         buttons.Controls.Add(cancel);
         buttons.Controls.Add(save);
 
-        // TODO #4: "Test Connection" checks the URL in the box without saving it.
-        _testButton = MakeButton("Test");
+        // TODO #4: "Test Connection" checks every URL in the box without saving them.
+        _testButton = MakeButton("Test Connection");
         _testButton.Width = 260;
-        _testButton.Text = "Test Connection";
         _testButton.Click += TestButton_Click;
         buttons.Controls.Add(_testButton);
 
@@ -88,7 +102,7 @@ public sealed class SettingsForm : Form
         {
             Text = "Open log folder",
             Dock = DockStyle.Bottom,
-            Height = 34,
+            Height = 30,
             Font = new Font("Segoe UI", 12),
             TextAlign = ContentAlignment.MiddleRight
         };
@@ -101,7 +115,7 @@ public sealed class SettingsForm : Form
             Text = "Start with Windows",
             Checked = AutoStart.IsEnabled,
             Dock = DockStyle.Bottom,
-            Height = 44,
+            Height = 40,
             Font = new Font("Segoe UI", 14)
         };
         Controls.Add(_autoStartBox);
@@ -110,7 +124,8 @@ public sealed class SettingsForm : Form
         {
             Text = string.IsNullOrEmpty(placement) ? "" : "Display: " + placement,
             Dock = DockStyle.Bottom,
-            Height = 34,
+            Height = 30,
+            AutoEllipsis = true,
             Font = new Font("Segoe UI", 12),
             ForeColor = Color.DimGray
         };
@@ -133,8 +148,20 @@ public sealed class SettingsForm : Form
         && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
         && !string.IsNullOrEmpty(uri.Host);
 
+    /// <summary>
+    /// Splits the box into URLs (blank lines ignored, duplicates removed).
+    /// Returns an error message naming the first bad line, or null if all are valid.
+    /// </summary>
+    private string? ReadUrls(out List<string> urls)
+    {
+        urls = _urlBox.Lines.Select(l => l.Trim()).Where(l => l.Length > 0)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        if (urls.Count == 0) return "Enter at least one listener URL.";
+        var bad = urls.FirstOrDefault(u => !IsValidUrl(u));
+        return bad is null ? null : $"Not a full http:// or https:// address: {bad}";
+    }
 
-    /// <summary>Shows a status line under the URL box: green for success, red for problems.</summary>
+    /// <summary>Shows text in the status area: green for success, red for problems.</summary>
     private void ShowStatus(string text, bool ok)
     {
         _errorLabel.ForeColor = ok ? Color.ForestGreen : Color.Firebrick;
@@ -142,36 +169,36 @@ public sealed class SettingsForm : Form
     }
 
     /// <summary>
-    /// Checks the URL in the box (without saving it) using the shared health check.
+    /// Checks every URL in the box (without saving) in parallel and lists each one's result.
     /// Runs async so the dialog stays responsive.
     /// </summary>
     private async void TestButton_Click(object? sender, EventArgs e)
     {
-        var url = _urlBox.Text.Trim();
-        if (!IsValidUrl(url))
+        if (ReadUrls(out var urls) is { } error)
         {
-            ShowStatus("Enter a full http:// or https:// address.", ok: false);
+            ShowStatus(error, ok: false);
             return;
         }
 
         _testButton.Enabled = false;
-        ShowStatus("Testing...", ok: true);
-        var result = await ListenerClient.CheckAsync(url);
+        ShowStatus($"Testing {urls.Count} listener(s)...", ok: true);
+        var outcomes = await ListenerClient.CheckAllAsync(urls);
         if (IsDisposed) return;
-        ShowStatus(result.Message, result.Ok);
+        ShowStatus(MainForm.DescribeOutcomes(outcomes, $"Test at {DateTime.Now:HH:mm:ss}"), outcomes.All(o => o.Result.Ok));
+        if (!outcomes.All(o => o.Result.Ok) && outcomes.Any(o => o.Result.Ok))
+            _errorLabel.ForeColor = Color.DarkOrange;   // some OK: amber, like the main screen's dot
         _testButton.Enabled = true;
     }
 
     private void Save_Click(object? sender, EventArgs e)
     {
-        var text = _urlBox.Text.Trim();
-        if (!IsValidUrl(text))
+        if (ReadUrls(out var urls) is { } error)
         {
-            ShowStatus("Enter a full http:// or https:// address.", ok: false);
+            ShowStatus(error, ok: false);
             _urlBox.Focus();
             return;
         }
-        ListenerUrl = text;
+        ListenerUrls = urls;
         DialogResult = DialogResult.OK;
         Close();
     }

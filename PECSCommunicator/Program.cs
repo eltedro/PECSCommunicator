@@ -20,6 +20,11 @@ static class Program
         if (args.Contains("--selftest-placement"))
             return ScreenPlacement.RunSelfTest() ? 0 : 1;
 
+        // Android TODO #5: send one "Walk" press to all listeners and print per-listener results; no UI, no mutex.
+        // Extra arguments are additional URLs for this run only, e.g. a bogus one to test a down listener.
+        if (args.Length > 0 && args[0] == "--selftest-send")
+            return MainForm.RunSendSelfTest(args.Skip(1));
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool isFirstInstance);
         if (!isFirstInstance)
         {
