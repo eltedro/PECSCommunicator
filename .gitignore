@@ -1,3 +1,5 @@
-/.vs
-/obj
+﻿# Build output and IDE state, at any depth
 bin/
+obj/
+.vs/
+*.user
