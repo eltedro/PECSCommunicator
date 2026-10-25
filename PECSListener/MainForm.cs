@@ -67,21 +67,44 @@ public partial class MainForm : Form
         Controls.Add(_statusLabel);
     }
 
+    /// <summary>The one URL prefix this Listener owns (must match the netsh urlacl reservation).</summary>
+    private const string ListenerPrefix = "http://+:5050/pecs/";
+    private const int ListenerPort = 5050;
+
     private void StartListener()
     {
         _listener = new HttpListener();
-        _listener.Prefixes.Add("http://+:5050/pecs/");
+        _listener.Prefixes.Add(ListenerPrefix);
         try
         {
             _listener.Start();
-            _statusLabel.Text = "Listening on port 5050";
+            _statusLabel.Text = $"Listening on port {ListenerPort}";
             Task.Run(ListenLoop);
+        }
+        catch (HttpListenerException ex)
+        {
+            // Translate the Windows error code into a plain cause the user can act on.
+            var cause = ex.ErrorCode switch
+            {
+                183 or 32 => $"Port {ListenerPort} is already in use, probably another PECS Listener is already running.",
+                5 => $"Windows hasn't reserved this URL; run: netsh http add urlacl url={ListenerPrefix} user=Everyone (as admin)",
+                _ => ex.Message
+            };
+            ShowStartError($"Failed to start on {ListenerPrefix} (error {ex.ErrorCode}): {cause}");
         }
         catch (Exception ex)
         {
-            _statusLabel.Text = "Failed to start: " + ex.Message;
-            _statusLabel.ForeColor = Color.OrangeRed;
+            ShowStartError($"Failed to start on {ListenerPrefix}: {ex.Message}");
         }
+    }
+
+    /// <summary>Shows a start-up error in the status line, enlarged so the whole message fits.</summary>
+    private void ShowStartError(string message)
+    {
+        _statusLabel.Font = new Font("Segoe UI", 11, FontStyle.Bold);
+        _statusLabel.Height = 70;
+        _statusLabel.ForeColor = Color.OrangeRed;
+        _statusLabel.Text = message;
     }
 
     private async Task ListenLoop()
@@ -92,6 +115,33 @@ public partial class MainForm : Form
             {
                 var context = await _listener.GetContextAsync();
                 var request = context.Request;
+
+                // GET = connection test from the Communicator's Settings screen.
+                // Answer with a small JSON identity; no banner, no log entry, no sound.
+                if (request.HttpMethod == "GET")
+                {
+                    var reply = JsonSerializer.Serialize(new { status = "ok", app = "PECSListener", machine = Environment.MachineName });
+                    var bytes = Encoding.UTF8.GetBytes(reply);
+                    context.Response.StatusCode = 200;
+                    context.Response.ContentType = "application/json";
+                    context.Response.ContentLength64 = bytes.Length;
+                    await context.Response.OutputStream.WriteAsync(bytes);
+                    context.Response.Close();
+
+                    var from = request.RemoteEndPoint?.Address.ToString() ?? "?";
+                    if (!IsDisposed && IsHandleCreated)
+                        BeginInvoke(() => _statusLabel.Text = $"Listening on port {ListenerPort} - last connection test from {from} at {DateTime.Now:HH:mm:ss}");
+                    continue;
+                }
+
+                // Only POST carries a tile press; anything else is rejected.
+                if (request.HttpMethod != "POST")
+                {
+                    context.Response.StatusCode = 405;
+                    context.Response.AddHeader("Allow", "GET, POST");
+                    context.Response.Close();
+                    continue;
+                }
 
                 string body;
                 using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))

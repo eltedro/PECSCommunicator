@@ -14,7 +14,7 @@
  * [x] 1. move tile definitions (label, color, image file) into appsettings.json so tiles change without a rebuild
  * [x] 2. add pictures to the Resources folder matching the tile names; show picture with a small label beneath (data-driven via #1)
  * [x] 3. add a hidden Settings screen (e.g. 3-second corner press + keyboard shortcut) to change the listener URL without editing appsettings.json
- * [ ] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
+ * [x] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
  * [ ] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
  * [ ] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
  * [ ] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
