@@ -17,7 +17,7 @@
  * [x] 4. add a "Test Connection" button inside Settings to verify the listener is reachable before saving
  * [x] 5. show a subtle adult-visible status indicator when the listener is unreachable; retry a failed send once
  * [x] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
- * [ ] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
+ * [x] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
  * [ ] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [ ] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * 
@@ -209,6 +209,14 @@ public partial class MainForm : Form
         _overlayLabel.BringToFront();
     }
 
+    // TODO #7: debounce. A tap of the SAME tile within DebounceSeconds of that tile's last sent
+    // press is not sent (Ian sometimes taps repeatedly). Different tiles are never debounced.
+    // Key = tile label, value = when that tile was last sent (attempted; a failed send still counts).
+    private readonly Dictionary<string, DateTime> _lastSentAt = new();
+
+    // Links the "Pressed" row to its result row in the CSV. Short random id, unique across restarts.
+    private static string NewPressId() => Guid.NewGuid().ToString("N")[..8];
+
     private async void Tile_Click(object? sender, EventArgs e)
     {
         if (sender is not Button btn || btn.Tag is not string label) return;
@@ -216,9 +224,27 @@ public partial class MainForm : Form
         // Releasing a completed corner hold must not count as a tap.
         if (_cornerHold.ShouldSuppressClick) return;
 
-        // Fire-and-forget notification to the listener
-        _ = NotifyListenerAsync(label);
+        var pressedAt = DateTime.Now;
+        var pressId = NewPressId();
+        var url = Settings.ListenerUrl; // capture: Settings may change while the send is in flight
 
+        bool suppressed = Settings.DebounceSeconds > 0
+            && _lastSentAt.TryGetValue(label, out var last)
+            && (pressedAt - last).TotalSeconds < Settings.DebounceSeconds;
+
+        // Log first, synchronously (a one-line append), so the tap is on disk even if the app
+        // is closed or crashes before the send finishes.
+        LogPress(pressId, pressedAt, label, suppressed ? "Suppressed" : "Pressed", suppressed,
+            suppressed ? $"Repeat within {Settings.DebounceSeconds:0.#} s; not sent" : "", url);
+
+        if (!suppressed)
+        {
+            _lastSentAt[label] = pressedAt;
+            _ = NotifyListenerAsync(pressId, pressedAt, label, url); // fire-and-forget; logs its own result
+        }
+
+        // Child feedback is the same for sent and suppressed taps, so Ian always gets a consistent
+        // response and isn't taught that tapping again "does nothing" (adults see it in the log).
         var originalColor = btn.BackColor;
         btn.BackColor = Color.White;
         await Task.Delay(150);
@@ -235,26 +261,29 @@ public partial class MainForm : Form
         // System.Media.SystemSounds.Asterisk.Play();
     }
 
-    // TODO #6: every press goes to %LOCALAPPDATA%\PECS\Logs\communicator-yyyy-MM-dd.csv.
-    // Outcome values: Sent, SentAfterRetry, Failed. Reserved for TODO #7 (debounce):
-    // a tap swallowed by the debounce is logged with Outcome=Suppressed and Suppressed=true.
+    // TODO #6/#7: every tap goes to %LOCALAPPDATA%\PECS\Logs\communicator-yyyy-MM-dd.csv as up to two rows
+    // sharing PressId, PressedAt, and Tile:
+    //   1. at the tap:       Outcome = Pressed (will be sent) or Suppressed (debounced; Suppressed = True)
+    //   2. when send is done: Outcome = Sent, SentAfterRetry, or Failed (Pressed taps only)
+    // Result rows of overlapping sends may interleave; PressId pairs them up.
     private static readonly CsvLog _pressLog =
-        new("communicator", "PressedAt", "Tile", "Outcome", "Suppressed", "Detail", "ListenerUrl");
+        new("communicator", "PressId", "PressedAt", "Tile", "Outcome", "Suppressed", "Detail", "ListenerUrl");
+
+    private static void LogPress(string pressId, DateTime pressedAt, string tile, string outcome,
+                                 bool suppressed, string detail, string url) =>
+        _pressLog.Append(pressId, pressedAt.ToString("yyyy-MM-dd HH:mm:ss.fff"), tile, outcome, suppressed, detail, url);
 
     /// <summary>
     /// Sends the press (with one retry inside ListenerClient), updates the dot from the final outcome,
-    /// and logs the press once the outcome is known.
+    /// and logs the result row.
     /// </summary>
-    private async Task NotifyListenerAsync(string tile)
+    private async Task NotifyListenerAsync(string pressId, DateTime pressedAt, string tile, string url)
     {
-        var pressedAt = DateTime.Now;
-        var url = Settings.ListenerUrl; // capture: Settings may change while the send is in flight
-
         // Never throws: failures only turn the dot red; Ian's feedback is unaffected.
         var result = await ListenerClient.SendPressAsync(url, tile, pressedAt);
         SetLinkState(result, "Send");
 
         var outcome = !result.Ok ? "Failed" : result.Retried ? "SentAfterRetry" : "Sent";
-        _pressLog.Append(pressedAt.ToString("yyyy-MM-dd HH:mm:ss.fff"), tile, outcome, false, result.Message, url);
+        LogPress(pressId, pressedAt, tile, outcome, false, result.Message, url);
     }
 }

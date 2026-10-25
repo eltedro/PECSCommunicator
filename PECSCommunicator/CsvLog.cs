@@ -25,8 +25,47 @@ public sealed class CsvLog
         _headerLine = string.Join(",", columns.Select(Escape));
     }
 
-    /// <summary>Path of today's file (a new file starts after midnight).</summary>
-    public string CurrentPath => Path.Combine(Folder, $"{_prefix}-{DateTime.Now:yyyy-MM-dd}.csv");
+    /// <summary>
+    /// Path of today's file (a new file starts after midnight).
+    /// If today's file was started with different columns (e.g. by an older version of the app),
+    /// rows go to "&lt;prefix&gt;-yyyy-MM-dd-2.csv" (then -3, ...) so one file never mixes layouts.
+    /// </summary>
+    public string CurrentPath
+    {
+        get
+        {
+            var date = DateTime.Now.ToString("yyyy-MM-dd");
+            if (_cachedDate == date && _cachedPath != null) return _cachedPath;
+
+            for (int n = 1; ; n++)
+            {
+                var path = Path.Combine(Folder, n == 1 ? $"{_prefix}-{date}.csv" : $"{_prefix}-{date}-{n}.csv");
+                if (!File.Exists(path) || ReadFirstLine(path) is null or "" || ReadFirstLine(path) == _headerLine)
+                {
+                    (_cachedDate, _cachedPath) = (date, path);
+                    return path;
+                }
+            }
+        }
+    }
+
+    private string? _cachedDate, _cachedPath;
+
+    /// <summary>First line of a file (shared read, so it works while Excel has it open); null if unreadable.</summary>
+    private static string? ReadFirstLine(string path)
+    {
+        try
+        {
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+            using var reader = new StreamReader(stream);
+            return reader.ReadLine();
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"CsvLog: could not read header of {path}: {ex.Message}");
+            return null;
+        }
+    }
 
     /// <summary>Appends one row. Values are converted with ToString(); null becomes an empty field.</summary>
     public void Append(params object?[] fields)

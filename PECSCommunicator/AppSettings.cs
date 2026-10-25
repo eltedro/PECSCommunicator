@@ -35,6 +35,7 @@ public sealed class AppSettings
 {
     public const string DefaultListenerUrl = "http://localhost:5050/pecs";
     public const int DefaultColumns = 2;
+    public const double DefaultDebounceSeconds = 2;
 
     /// <summary>The original four tiles, used when the file has none.</summary>
     public static readonly IReadOnlyList<TileDefinition> DefaultTiles = new[]
@@ -48,6 +49,9 @@ public sealed class AppSettings
     // Mutable so the Settings screen can apply a new URL without a restart.
     public string ListenerUrl { get; set; } = DefaultListenerUrl;
     public int Columns { get; init; } = DefaultColumns;
+
+    /// <summary>Repeat taps of the same tile within this many seconds are logged but not sent; 0 disables.</summary>
+    public double DebounceSeconds { get; init; } = DefaultDebounceSeconds;
     public IReadOnlyList<TileDefinition> Tiles { get; init; } = DefaultTiles;
 
     /// <summary>Loads settings from appsettings.json in the app folder.</summary>
@@ -80,7 +84,13 @@ public sealed class AppSettings
                 && c.TryGetInt32(out var n) && n > 0)
                 columns = n;
 
-            return new AppSettings { ListenerUrl = url, Columns = columns, Tiles = ReadTiles(root) };
+            // DebounceSeconds: a number >= 0 (0 turns debouncing off).
+            var debounce = DefaultDebounceSeconds;
+            if (root.TryGetProperty("DebounceSeconds", out var db) && db.ValueKind == JsonValueKind.Number
+                && db.TryGetDouble(out var secs) && secs >= 0)
+                debounce = secs;
+
+            return new AppSettings { ListenerUrl = url, Columns = columns, DebounceSeconds = debounce, Tiles = ReadTiles(root) };
         }
         catch
         {
