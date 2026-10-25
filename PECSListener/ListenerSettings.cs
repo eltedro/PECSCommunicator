@@ -15,6 +15,10 @@ public sealed class ListenerSettings
     /// <summary>Spoken text; "{tile}" is replaced with the tile label.</summary>
     public string SpeechTemplate { get; private init; } = "Ian wants {tile}";
 
+    /// <summary>Milliseconds after the sound starts before speech starts; 0 = together. Negative/invalid -> 300.</summary>
+    public int SpeechDelayMs { get; private init; } = DefaultSpeechDelayMs;
+    public const int DefaultSpeechDelayMs = 300;
+
     /// <summary>Flash the taskbar button until the window is brought to the foreground.</summary>
     public bool FlashTaskbar { get; private init; } = true;
 
@@ -82,6 +86,8 @@ public sealed class ListenerSettings
             {
                 Speak = GetBool(root, "Speak", d.Speak),
                 SpeechTemplate = string.IsNullOrWhiteSpace(template) ? d.SpeechTemplate : template,
+                SpeechDelayMs = root.TryGetProperty("SpeechDelayMs", out var sd) && sd.ValueKind == JsonValueKind.Number
+                                && sd.TryGetInt32(out var ms) && ms >= 0 ? ms : DefaultSpeechDelayMs,
                 FlashTaskbar = GetBool(root, "FlashTaskbar", d.FlashTaskbar),
                 BringToFront = GetBool(root, "BringToFront", d.BringToFront),
                 Sounds = sounds,

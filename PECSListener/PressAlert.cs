@@ -6,9 +6,11 @@ using System.Speech.Synthesis;
 namespace PECSListener;
 
 /// <summary>
-/// TODO #9: makes a press hard to miss: the tile's sound, then (optionally) speech, a flashing
-/// taskbar button, and optionally bringing the window to the front. Only POSTed presses call this;
+/// TODO #9: makes a press hard to miss: the tile's sound, (optionally) speech, a flashing taskbar
+/// button, and optionally bringing the window to the front. Only POSTed presses call this;
 /// health-check GETs never do.
+/// Timing: the sound starts at once without waiting for it to finish, and the speech starts
+/// SpeechDelayMs later (0 = together with the sound), so the voice comes in over the tail of the sound.
 /// Problems never throw; they go to Debug output and %TEMP%\pecs_listener_diag.txt.
 /// </summary>
 public sealed class PressAlert : IDisposable
@@ -16,9 +18,10 @@ public sealed class PressAlert : IDisposable
     private readonly Form _window;
     private readonly ListenerSettings _settings;
     private readonly SpeechSynthesizer? _synth;
-    private readonly object _soundLock = new();
     private SoundPlayer? _player;
-    private int _generation; // bumped per press so a stale press doesn't speak after a newer one
+
+    // Cancels the previous press's pending (delayed) speech when a newer press arrives.
+    private CancellationTokenSource? _pendingSpeech;
 
     public static string DiagPath => Path.Combine(Path.GetTempPath(), "pecs_listener_diag.txt");
 
@@ -32,7 +35,7 @@ public sealed class PressAlert : IDisposable
             _synth = new SpeechSynthesizer();
             _synth.SetOutputToDefaultAudioDevice();
             _synth.SpeakCompleted += (_, e) => { if (e.Error != null) Diag("Speech error: " + e.Error.Message); };
-            Diag($"Speech ready, voice: {_synth.Voice.Name}");
+            Diag($"Speech ready, voice: {_synth.Voice.Name}, delay {settings.SpeechDelayMs} ms");
         }
         catch (Exception ex)
         {
@@ -41,30 +44,52 @@ public sealed class PressAlert : IDisposable
         }
     }
 
-    /// <summary>Call on the UI thread for each received press.</summary>
+    /// <summary>
+    /// Call on the UI thread for each received press. Rapid presses: the newest press stops the previous
+    /// sound, cancels its pending speech and any speech in progress, so only the newest press speaks.
+    /// </summary>
     public void OnPress(string tile)
     {
+        var clock = Stopwatch.StartNew(); // offsets in the diag log are from the moment the press arrived
+
         if (_settings.FlashTaskbar) Flash();
         if (_settings.BringToFront) BringToFront();
 
-        // Sound then speech on a worker thread so the UI and the HTTP loop never wait.
-        int generation = Interlocked.Increment(ref _generation);
-        var wav = ResolveSound(tile);
-        var text = _settings.SpeechTemplate.Replace("{tile}", tile, StringComparison.OrdinalIgnoreCase);
-        _ = Task.Run(() =>
-        {
-            PlaySound(wav, tile);
+        // Supersede the previous press.
+        _pendingSpeech?.Cancel();
+        _pendingSpeech?.Dispose();
+        _pendingSpeech = null;
+        try { _synth?.SpeakAsyncCancelAll(); } catch (Exception ex) { Diag("Speech cancel failed: " + ex.Message); }
 
-            // Rapid presses: only the newest one speaks, and it cuts off anything still being said.
-            if (_synth == null || generation != Volatile.Read(ref _generation)) return;
-            try
-            {
-                _synth.SpeakAsyncCancelAll();
-                _synth.SpeakAsync(text);
-                Diag($"Press {tile}: sound {(wav ?? "Asterisk")}, speaking \"{text}\"");
-            }
-            catch (Exception ex) { Diag("Speech failed: " + ex.Message); }
-        });
+        var wav = ResolveSound(tile);
+        StartSound(wav, tile);
+        Diag($"Press {tile}: sound {(wav ?? "Asterisk")} started at +{clock.ElapsedMilliseconds} ms");
+
+        if (_synth == null) return; // Speak is off (or no voice): sound only
+
+        var text = _settings.SpeechTemplate.Replace("{tile}", tile, StringComparison.OrdinalIgnoreCase);
+        _pendingSpeech = new CancellationTokenSource();
+        _ = SpeakAfterDelayAsync(tile, text, _settings.SpeechDelayMs, _pendingSpeech.Token, clock);
+    }
+
+    /// <summary>Waits the delay (unless a newer press cancels it), then speaks. Runs on the UI thread.</summary>
+    private async Task SpeakAfterDelayAsync(string tile, string text, int delayMs, CancellationToken token, Stopwatch clock)
+    {
+        try
+        {
+            if (delayMs > 0) await Task.Delay(delayMs, token);
+            token.ThrowIfCancellationRequested();
+            _synth!.SpeakAsync(text); // returns immediately; speech plays in the background
+            Diag($"Press {tile}: speaking \"{text}\" started at +{clock.ElapsedMilliseconds} ms");
+        }
+        catch (OperationCanceledException)
+        {
+            Diag($"Press {tile}: speech cancelled by a newer press at +{clock.ElapsedMilliseconds} ms");
+        }
+        catch (Exception ex)
+        {
+            Diag("Speech failed: " + ex.Message);
+        }
     }
 
     /// <summary>Tile's .wav, else "Default", else null (system Asterisk). Missing files count as not set.</summary>
@@ -79,20 +104,18 @@ public sealed class PressAlert : IDisposable
         return null;
     }
 
-    /// <summary>Plays the wav to the end (blocking this worker), stopping any previous one first.</summary>
-    private void PlaySound(string? wav, string tile)
+    /// <summary>Stops any previous sound and starts this one without waiting for it to finish.</summary>
+    private void StartSound(string? wav, string tile)
     {
+        _player?.Stop();
+        _player?.Dispose();
+        _player = null;
+
         if (wav == null) { SystemSounds.Asterisk.Play(); return; }
         try
         {
-            SoundPlayer player;
-            lock (_soundLock)
-            {
-                _player?.Stop();
-                _player?.Dispose();
-                _player = player = new SoundPlayer(wav);
-            }
-            player.PlaySync();
+            _player = new SoundPlayer(wav);
+            _player.Play(); // asynchronous playback
         }
         catch (Exception ex)
         {
@@ -151,7 +174,9 @@ public sealed class PressAlert : IDisposable
 
     public void Dispose()
     {
-        lock (_soundLock) { _player?.Dispose(); }
+        _pendingSpeech?.Cancel();
+        _pendingSpeech?.Dispose();
+        _player?.Dispose();
         _synth?.Dispose();
     }
 }
