@@ -14,10 +14,15 @@ public partial class MainForm : Form
     private Label _eventLabel = null!;
     private ListBox _logList = null!;
 
+    // TODO #9: sound, speech, taskbar flash, bring-to-front on each press (options in appsettings.json).
+    private readonly PressAlert _alert;
+
     public MainForm()
     {
         InitializeComponent();
         SetupUI();
+        _alert = new PressAlert(this, ListenerSettings.Load());
+        FormClosed += (_, _) => _alert.Dispose();
         StartListener();
     }
 
@@ -220,8 +225,8 @@ public partial class MainForm : Form
             _logList.Items.Insert(0, $"{time}  →  {tile}");
             if (_logList.Items.Count > 100) _logList.Items.RemoveAt(100);
 
-            // Optional soft sound (non-blocking)
-            System.Media.SystemSounds.Asterisk.Play();
+            // TODO #9: tile sound + speech + taskbar flash (non-blocking; replaces the old Asterisk beep).
+            _alert.OnPress(tile);
         }
         catch
         {

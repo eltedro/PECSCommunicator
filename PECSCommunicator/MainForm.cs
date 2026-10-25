@@ -19,7 +19,7 @@
  * [x] 6. log every press (incl. failed sends) to a dated CSV on both Communicator and Listener
  * [x] 7. debounce rapid repeat taps of the same tile (~2 s) so the listener isn't flooded; still log them
  * [x] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
- * [ ] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
+ * [x] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * 
  */
 
