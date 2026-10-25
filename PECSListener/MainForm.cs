@@ -16,12 +16,13 @@ public partial class MainForm : Form
 
     // TODO #9: sound, speech, taskbar flash, bring-to-front on each press (options in appsettings.json).
     private readonly PressAlert _alert;
+    private readonly ListenerSettings _settings = ListenerSettings.Load();
 
     public MainForm()
     {
         InitializeComponent();
         SetupUI();
-        _alert = new PressAlert(this, ListenerSettings.Load());
+        _alert = new PressAlert(this, _settings);
         FormClosed += (_, _) => _alert.Dispose();
         StartListener();
     }
@@ -212,14 +213,7 @@ public partial class MainForm : Form
 
             // Big passive banner
             _eventLabel.Text = $"Ian pressed: {tile}";
-            _eventLabel.BackColor = tile switch
-            {
-                "Toilet" => Color.FromArgb(0, 80, 160),
-                "Snack" => Color.FromArgb(0, 120, 60),
-                "Water" => Color.FromArgb(0, 140, 140),
-                "Walk" => Color.FromArgb(160, 120, 0),
-                _ => Color.FromArgb(0, 100, 0)
-            };
+            _eventLabel.BackColor = _settings.BannerColorFor(tile); // TODO #9 follow-up: colors from appsettings.json
 
             // Log entry
             _logList.Items.Insert(0, $"{time}  →  {tile}");
