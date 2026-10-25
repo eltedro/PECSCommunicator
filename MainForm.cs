@@ -8,7 +8,10 @@
 
 /**
  * TODO: 
- * [ ] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
+ * [x] what do I need to do to make PECSCommunicator and PECSListener work on different computers on the same network? 
+ * [ ] add a "Settings" menu item to change the listener URL without needing to edit appsettings.json
+ * [ ] add a "Test Connection" button to verify the listener is reachable
+ * [ ] add pictures to the Resources folder that match the PECS tiles names (Text) and use them instead of text on the buttons
  * 
  */
 
