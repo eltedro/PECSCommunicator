@@ -2,5 +2,34 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <!-- The Communicator reaches the phone over Wi-Fi on port 5050. -->
   <uses-permission android:name="android.permission.INTERNET" />
-  <application android:label="PECS Listener" android:supportsRtl="true"></application>
+  <!-- TODO #2: always-on listener. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+  <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+  <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+  <uses-permission android:name="android.permission.WAKE_LOCK" />
+  <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+
+  <application android:label="PECS Listener" android:supportsRtl="true">
+
+    <!--
+      foregroundServiceType="specialUse": none of the standard types fit a LAN server that waits for
+      incoming requests. dataSync would be wrong anyway: Android 15+ caps it at 6 h per day and forbids
+      starting it from BOOT_COMPLETED. specialUse has no time limit and may start from BOOT_COMPLETED.
+    -->
+    <service android:name="com.pecs.listener.ListenerService"
+             android:exported="false"
+             android:foregroundServiceType="specialUse">
+      <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Local-network HTTP listener on port 5050 that receives picture-tile presses from a non-verbal user's communication board and alerts the caregiver." />
+    </service>
+
+    <receiver android:name="com.pecs.listener.BootReceiver" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.BOOT_COMPLETED" />
+      </intent-filter>
+    </receiver>
+
+  </application>
 </manifest>

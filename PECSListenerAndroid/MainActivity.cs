@@ -3,41 +3,73 @@
 // Android TODO list:
 // [x] 1. Android listener project: embedded HTTP server on port 5050 at /pecs/,
 //        same GET health check / POST press / 405 behavior as the Windows Listener.
-// [ ] 2. Always-on foreground service with boot start and battery-optimization prompt.
+// [x] 2. Always-on foreground service with boot start and battery-optimization prompt.
 // [ ] 3. Alerts: per-tile color banner + high-priority notification, per-tile sound,
 //        TTS "Ian wants {tile}", vibrate.
 // [ ] 4. Log screen + CSV in the same format as the laptop.
 // [ ] 5. Communicator multi-listener: ListenerUrls list with per-listener status / Test Connection.
 // [ ] 6. Fixed IPs: router DHCP reservations + phone "Phone MAC" setting.
 
+using Android;
+using Android.Content;
+using Android.Content.PM;
 using Android.Graphics;
-using Android.Net;
-using Android.Net.Wifi;
+using Android.OS;
 using Android.Views;
 using Android.Widget;
-using System.Net.Sockets;
 
 namespace PECSListenerAndroid;
 
-[Activity(Label = "PECS Listener", MainLauncher = true, Theme = "@android:style/Theme.DeviceDefault.NoActionBar", ScreenOrientation = Android.Content.PM.ScreenOrientation.Portrait)]
+/// <summary>
+/// Shows the listener's status and the latest press. The server itself lives in ListenerService
+/// (TODO #2), so presses are received whether or not this screen is open.
+/// </summary>
+[Activity(Label = "PECS Listener", MainLauncher = true, LaunchMode = LaunchMode.SingleTop,
+          Theme = "@android:style/Theme.DeviceDefault.NoActionBar",
+          ScreenOrientation = ScreenOrientation.Portrait)]
 public class MainActivity : Activity
 {
+    private const int NotificationPermissionRequest = 1;
+
     private TextView _statusText = null!;
+    private TextView _batteryText = null!;
     private TextView _bannerText = null!;
     private TextView _timeText = null!;
-
-    // TODO #2: this moves into the foreground service; the activity will just display its events.
-    private PecsHttpServer? _server;
 
     protected override void OnCreate(Bundle? savedInstanceState)
     {
         base.OnCreate(savedInstanceState);
-        Window?.AddFlags(WindowManagerFlags.KeepScreenOn);   // keep visible during testing
+        Window?.AddFlags(WindowManagerFlags.KeepScreenOn);   // keep visible while open
         SetContentView(BuildLayout());
-        StartServer();
+
+        ListenerService.Start(this);
+        RequestNotificationPermission();   // then the battery prompt, see OnRequestPermissionsResult
     }
 
-    /// <summary>Builds the screen in code: status line on top, big banner below (mirrors the laptop).</summary>
+    protected override void OnResume()
+    {
+        base.OnResume();
+        ListenerService.PressReceived += OnPress;
+        ListenerService.HealthChecked += OnHealthCheck;
+        ListenerService.StateChanged += OnStateChanged;
+        ShowServiceState();
+        ShowBatteryState();   // refresh after returning from the battery settings dialog
+
+        if (ListenerService.LastPress is { } last)
+            ShowPress(last.Tile, last.Time, last.Received);
+    }
+
+    protected override void OnPause()
+    {
+        ListenerService.PressReceived -= OnPress;
+        ListenerService.HealthChecked -= OnHealthCheck;
+        ListenerService.StateChanged -= OnStateChanged;
+        base.OnPause();
+    }
+
+    // ---------- Layout ----------
+
+    /// <summary>Builds the screen in code: status lines on top, big banner below (mirrors the laptop).</summary>
     private View BuildLayout()
     {
         var root = new LinearLayout(this) { Orientation = Orientation.Vertical };
@@ -45,11 +77,16 @@ public class MainActivity : Activity
         // Base 32px margin plus whatever the system bars need (see SystemBarInsetsPadding).
         root.SetOnApplyWindowInsetsListener(new SystemBarInsetsPadding(32));
 
+        var fullWidth = () => new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent);
+
         _statusText = new TextView(this) { Text = "Starting..." };
         _statusText.SetTextColor(Color.LightGreen);
         _statusText.TextSize = 16;
-        // Full width so long messages wrap inside the margins instead of running off screen.
-        root.AddView(_statusText, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent));
+        root.AddView(_statusText, fullWidth());
+
+        _batteryText = new TextView(this);
+        _batteryText.TextSize = 14;
+        root.AddView(_batteryText, fullWidth());
 
         _bannerText = new TextView(this) { Text = "Waiting for Ian...", Gravity = GravityFlags.Center };
         _bannerText.SetTextColor(Color.White);
@@ -57,99 +94,92 @@ public class MainActivity : Activity
         _bannerText.TextSize = 34;
         _bannerText.SetTypeface(null, TypefaceStyle.Bold);
         _bannerText.SetPadding(16, 80, 16, 80);
-        var bannerParams = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MatchParent, ViewGroup.LayoutParams.WrapContent) { TopMargin = 32 };
+        var bannerParams = fullWidth();
+        bannerParams.TopMargin = 32;
         root.AddView(_bannerText, bannerParams);
 
         _timeText = new TextView(this) { Gravity = GravityFlags.Center };
         _timeText.SetTextColor(Color.LightGray);
         _timeText.TextSize = 18;
-        root.AddView(_timeText);
+        root.AddView(_timeText, fullWidth());
 
         return root;
     }
 
-    private void StartServer()
-    {
-        var machine = $"{Android.OS.Build.Manufacturer} {Android.OS.Build.Model}";
-        _server = new PecsHttpServer(machine);
-        _server.PressReceived += OnPress;
-        _server.HealthChecked += from =>
-            RunOnUiThread(() => _statusText.Text = $"{ListeningText()} - last connection test from {from} at {DateTime.Now:HH:mm:ss}");
+    // ---------- Service events (arrive on a server thread) ----------
 
+    private void OnPress(string tile, string time, string fromIp) =>
+        RunOnUiThread(() => ShowPress(tile, time, DateTime.Now));
+
+    private void OnHealthCheck(string from) =>
+        RunOnUiThread(() => _statusText.Text = $"Listening on {NetworkInfo.ListenUrl(this)} - last connection test from {from} at {DateTime.Now:HH:mm:ss}");
+
+    private void OnStateChanged() => RunOnUiThread(ShowServiceState);
+
+    private void ShowPress(string tile, string time, DateTime received)
+    {
+        _bannerText.Text = $"Ian pressed: {tile}";
+        _timeText.Text = string.IsNullOrEmpty(time) ? $"received {received:HH:mm:ss}" : $"sent {time}, received {received:HH:mm:ss}";
+    }
+
+    private void ShowServiceState()
+    {
+        if (ListenerService.StartError is { } error)
+        {
+            _statusText.SetTextColor(Color.OrangeRed);
+            _statusText.Text = error;
+        }
+        else
+        {
+            _statusText.SetTextColor(Color.LightGreen);
+            _statusText.Text = ListenerService.IsRunning ? $"Listening on {NetworkInfo.ListenUrl(this)}" : "Starting...";
+        }
+    }
+
+    // ---------- First-run prompts ----------
+
+    /// <summary>Android 13+ needs runtime permission to show the "running" notification.</summary>
+    private void RequestNotificationPermission()
+    {
+        if (OperatingSystem.IsAndroidVersionAtLeast(33) &&
+            CheckSelfPermission(Manifest.Permission.PostNotifications) != Permission.Granted)
+            RequestPermissions(new[] { Manifest.Permission.PostNotifications }, NotificationPermissionRequest);
+        else
+            RequestIgnoreBatteryOptimizations();
+    }
+
+    public override void OnRequestPermissionsResult(int requestCode, string[] permissions, Permission[] grantResults)
+    {
+        base.OnRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode == NotificationPermissionRequest)
+        {
+            ListenerService.Start(this);   // refresh the notification now that it may be shown
+            RequestIgnoreBatteryOptimizations();
+        }
+    }
+
+    /// <summary>Asks Android to exempt the app from battery optimization (Doze), unless already exempt.</summary>
+    private void RequestIgnoreBatteryOptimizations()
+    {
+        if (IsIgnoringBatteryOptimizations()) return;
         try
         {
-            _server.Start();
-            _statusText.Text = ListeningText();
+            var intent = new Intent(Android.Provider.Settings.ActionRequestIgnoreBatteryOptimizations,
+                                    Android.Net.Uri.Parse($"package:{PackageName}"));
+            StartActivity(intent);
         }
-        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.AddressAlreadyInUse)
-        {
-            ShowStartError($"Port {PecsHttpServer.Port} is already in use, probably another PECS Listener is already running.");
-        }
-        catch (Exception ex)
-        {
-            ShowStartError($"Failed to start on port {PecsHttpServer.Port}: {ex.Message}");
-        }
+        catch { /* some devices lack the dialog; the status line tells the user */ }
     }
 
-    private void ShowStartError(string message)
-    {
-        _statusText.SetTextColor(Color.OrangeRed);
-        _statusText.Text = message;
-    }
+    private bool IsIgnoringBatteryOptimizations() =>
+        ((PowerManager?)GetSystemService(PowerService))?.IsIgnoringBatteryOptimizations(PackageName) == true;
 
-    /// <summary>Called on a server thread; marshals to the UI thread to update the banner.</summary>
-    private void OnPress(string tile, string time, string fromIp)
+    private void ShowBatteryState()
     {
-        var received = DateTime.Now.ToString("HH:mm:ss");
-        RunOnUiThread(() =>
-        {
-            _bannerText.Text = $"Ian pressed: {tile}";
-            _timeText.Text = string.IsNullOrEmpty(time) ? $"received {received}" : $"sent {time}, received {received}";
-        });
-    }
-
-    /// <summary>"Listening on 192.168.x.y:5050" so the URL to put in the Communicator is visible.</summary>
-    private string ListeningText()
-    {
-        var ip = GetWifiIp();
-        return ip == null ? $"Listening on port {PecsHttpServer.Port}" : $"Listening on http://{ip}:{PecsHttpServer.Port}/pecs";
-    }
-
-    /// <summary>
-    /// The phone's Wi-Fi IPv4 address: a non-loopback site-local (192.168.x / 10.x / 172.16-31.x)
-    /// address, preferring wlan0. Falls back to the active network's LinkProperties.
-    /// </summary>
-    private string? GetWifiIp()
-    {
-        try
-        {
-            var candidates = new List<(string Name, string Ip)>();
-            var nics = Java.Net.NetworkInterface.NetworkInterfaces;
-            while (nics != null && nics.HasMoreElements)
-            {
-                if (nics.NextElement() is not Java.Net.NetworkInterface nic || !nic.IsUp || nic.IsLoopback) continue;
-                var addrs = nic.InetAddresses;
-                while (addrs != null && addrs.HasMoreElements)
-                {
-                    if (addrs.NextElement() is Java.Net.Inet4Address a && a.IsSiteLocalAddress && a.HostAddress != null)
-                        candidates.Add((nic.Name ?? "", a.HostAddress));
-                }
-            }
-            var best = candidates.FirstOrDefault(c => c.Name == "wlan0");
-            if (best.Ip != null) return best.Ip;
-            if (candidates.Count > 0) return candidates[0].Ip;
-        }
-        catch { /* fall through to ConnectivityManager */ }
-
-        try
-        {
-            var cm = (ConnectivityManager?)GetSystemService(ConnectivityService);
-            var props = cm?.GetLinkProperties(cm.ActiveNetwork);
-            return props?.LinkAddresses
-                .Select(a => a.Address)
-                .FirstOrDefault(a => a is Java.Net.Inet4Address)?.HostAddress;
-        }
-        catch { return null; }
+        bool off = IsIgnoringBatteryOptimizations();
+        _batteryText.SetTextColor(off ? Color.LightGreen : Color.Orange);
+        _batteryText.Text = off ? "Battery optimization: off (good)"
+                                : "Battery optimization: ON - presses may be missed when the phone sleeps";
     }
 
     /// <summary>
@@ -176,11 +206,5 @@ public class MainActivity : Activity
             v.SetPadding(l + margin, t + margin, r + margin, b + margin);
             return insets;
         }
-    }
-
-    protected override void OnDestroy()
-    {
-        _server?.Dispose();
-        base.OnDestroy();
     }
 }
