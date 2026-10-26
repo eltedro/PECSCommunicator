@@ -30,6 +30,10 @@ static class Program
         if (args.Length > 0 && args[0] == "--selftest-tiles")
             return TileSelfTest.Run(args.Skip(1));
 
+        // TODO #11: speak every tile (or the labels given) once, in order; no UI, no mutex.
+        if (args.Length > 0 && args[0] == "--selftest-audio")
+            return MainForm.RunAudioSelfTest(args.Skip(1));
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool isFirstInstance);
         if (!isFirstInstance)
         {

@@ -16,12 +16,16 @@ public sealed class SettingsForm : Form
     /// <summary>State of "Start with Windows"; applied by the caller after Save (TODO #8).</summary>
     public bool StartWithWindows => _autoStartBox.Checked;
 
+    /// <summary>TODO #11: the "Audio feedback" checkbox (spoken word on each tap).</summary>
+    public bool AudioFeedback => _audioBox.Checked;
+    private readonly CheckBox _audioBox;
+
     /// <summary>The validated listener URLs after the user presses Save.</summary>
     public IReadOnlyList<string> ListenerUrls { get; private set; }
 
     /// <param name="reloadTiles">TODO #10: rebuilds the main screen's tiles and returns a one-line summary; null hides the button.</param>
     public SettingsForm(IReadOnlyList<string> currentUrls, string? lastStatus = null, string? placement = null,
-        Func<string>? reloadTiles = null)
+        Func<string>? reloadTiles = null, bool audioFeedback = true)
     {
         ListenerUrls = currentUrls;
 
@@ -121,15 +125,27 @@ public sealed class SettingsForm : Form
         Controls.Add(logsLink);
 
         // TODO #8: auto-start checkbox (current state read from the registry) and the display placement line.
+        // TODO #11: "Audio feedback" shares the row, so the dialog still fits the 1024x600 panel.
         _autoStartBox = new CheckBox
         {
             Text = "Start with Windows",
             Checked = AutoStart.IsEnabled,
-            Dock = DockStyle.Bottom,
-            Height = 40,
+            AutoSize = true,
+            Margin = new Padding(0, 4, 40, 0),
             Font = new Font("Segoe UI", 14)
         };
-        Controls.Add(_autoStartBox);
+        _audioBox = new CheckBox
+        {
+            Text = "Audio feedback",
+            Checked = audioFeedback,
+            AutoSize = true,
+            Margin = new Padding(0, 4, 0, 0),
+            Font = new Font("Segoe UI", 14)
+        };
+        var checks = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 40, WrapContents = false };
+        checks.Controls.Add(_autoStartBox);
+        checks.Controls.Add(_audioBox);
+        Controls.Add(checks);
 
         var placementLabel = new Label
         {

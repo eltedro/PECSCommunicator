@@ -68,6 +68,9 @@ public sealed class AppSettings
     /// </summary>
     public bool HasConfiguredTiles { get; init; }
 
+    /// <summary>TODO #11: spoken feedback on tap (the "AudioFeedback" section).</summary>
+    public AudioFeedbackSettings AudioFeedback { get; init; } = new();
+
     /// <summary>Loads settings from appsettings.json in the app folder.</summary>
     public static AppSettings Load() => Load(DefaultPath);
 
@@ -127,6 +130,7 @@ public sealed class AppSettings
             var tiles = ReadTiles(root);
             return new AppSettings
             {
+                AudioFeedback = ReadAudio(root),
                 ListenerUrls = urls, Columns = columns, DebounceSeconds = debounce, TouchScreenSize = touchSize,
                 Tiles = tiles, HasConfiguredTiles = !ReferenceEquals(tiles, DefaultTiles)
             };
@@ -153,6 +157,54 @@ public sealed class AppSettings
             tiles.Add(new TileDefinition(label.Trim(), GetString(t, "Color"), GetString(t, "Image")));
         }
         return tiles.Count > 0 ? tiles : DefaultTiles;
+    }
+
+    /// <summary>
+    /// TODO #11: reads "AudioFeedback"; each value falls back to its default on its own when missing
+    /// or invalid. Volume is clamped to 0-100 and Rate to -10..10.
+    /// </summary>
+    private static AudioFeedbackSettings ReadAudio(JsonElement root)
+    {
+        var d = new AudioFeedbackSettings();
+        if (!root.TryGetProperty("AudioFeedback", out var a) || a.ValueKind != JsonValueKind.Object) return d;
+
+        bool Bool(string name, bool def) =>
+            a.TryGetProperty(name, out var v) && v.ValueKind is JsonValueKind.True or JsonValueKind.False ? v.GetBoolean() : def;
+        int Int(string name, int def, int min, int max) =>
+            a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) ? Math.Clamp(n, min, max) : def;
+
+        var template = GetString(a, "SpeechTemplate");
+        return new AudioFeedbackSettings
+        {
+            Enabled = Bool("Enabled", d.Enabled),
+            Speak = Bool("Speak", d.Speak),
+            SpeechTemplate = string.IsNullOrWhiteSpace(template) ? d.SpeechTemplate : template,
+            Volume = Int("Volume", d.Volume, 0, 100),
+            Rate = Int("Rate", d.Rate, -10, 10),
+            Chime = Bool("Chime", d.Chime),
+            SpeakRepeats = Bool("SpeakRepeats", d.SpeakRepeats)
+        };
+    }
+
+    /// <summary>
+    /// TODO #11: writes AudioFeedback.Enabled into appsettings.json by replacing just that value in the
+    /// text (comments survive). Adds a minimal section before the last brace if there is none.
+    /// </summary>
+    public static void SaveAudioEnabled(string path, bool enabled)
+    {
+        var text = File.Exists(path) ? File.ReadAllText(path) : "{\r\n}";
+        var value = enabled ? "true" : "false";
+        var re = new System.Text.RegularExpressions.Regex("(\"AudioFeedback\"\\s*:\\s*\\{[^}]*?\"Enabled\"\\s*:\\s*)(true|false)");
+        if (re.IsMatch(text))
+            text = re.Replace(text, m => m.Groups[1].Value + value, 1);
+        else
+        {
+            int end = text.LastIndexOf('}');
+            var body = text[..end].TrimEnd();
+            var comma = body.EndsWith('{') || body.EndsWith(',') ? "" : ",";
+            text = body + comma + "\r\n  \"AudioFeedback\": { \"Enabled\": " + value + " }\r\n" + text[end..];
+        }
+        File.WriteAllText(path, text);
     }
 
     private static string GetString(JsonElement obj, string name) =>

@@ -21,7 +21,10 @@
  * [x] 8. if exactly three displays are detected, open full-screen on the 7" display; otherwise open in a borderless 1024x600 window. Auto-start with Windows.
  * [x] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * [x] 10. Make the number of tiles/buttons dynamic by reading the .png files in the Resources folder and using their names as the labels. (The color can be a default or derived from the image.)
- * [ ] 11. Create a REAMDE.md with instructions for running the Communicator and Listener on different platforms, including network configuration and firewall settings as necessary. Include the touch screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
+ * [x] 11. The Communicator needs to provide audio feedback for Ian in addition to the current visual. This emulates the PECS device he uses at school. It should just be a single spoken word, e.g. "Eat", "Help", etc.
+ * [ ] 12. Create a REAMDE.md with instructions for running the Communicator and Listener on different platforms, including network configuration and firewall settings as necessary. Include the touch screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
+ * [ ] 13. During testing evening of 10/25/2026, after the apps had been running for 20 minutes or so, tapping a tile in the Communicator did not result in a Listener response, and the status bulb shows red.
+ * [ ] 14. Explore possibilities for making the Android listener work through the internet isntead of LAN.
  */
 
 namespace PECSCommunicator;
@@ -63,6 +66,9 @@ public partial class MainForm : Form
         EventHandler onDisplayChange = (_, _) => BeginInvoke(() => _placementText = ScreenPlacement.Apply(this, Settings.TouchScreenSize));
         Microsoft.Win32.SystemEvents.DisplaySettingsChanged += onDisplayChange;
         FormClosed += (_, _) => Microsoft.Win32.SystemEvents.DisplaySettingsChanged -= onDisplayChange;
+        // TODO #11: spoken word per tap; created before the tiles, which look up their .wav overrides.
+        _audio = new AudioFeedback(Settings.AudioFeedback);
+        FormClosed += (_, _) => _audio.Dispose();
         SetupPECSTiles();
         WatchTileFolder();   // TODO #10: live reload when Resources changes
         SetupOverlay();
@@ -148,7 +154,8 @@ public partial class MainForm : Form
     /// <summary>Shows the Settings dialog; on Save, writes appsettings.json and applies the URLs now.</summary>
     private void OpenSettings()
     {
-        using var dlg = new SettingsForm(Settings.ListenerUrls, _linkStatusText, _placementText, reloadTiles: SetupPECSTiles);
+        using var dlg = new SettingsForm(Settings.ListenerUrls, _linkStatusText, _placementText, reloadTiles: SetupPECSTiles,
+            audioFeedback: _audio.Enabled);
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
         try
@@ -156,6 +163,14 @@ public partial class MainForm : Form
             AppSettings.SaveListenerUrls(AppSettings.DefaultPath, dlg.ListenerUrls);
             Settings.ListenerUrls = dlg.ListenerUrls; // takes effect on the next tap
             _ = CheckListenerAsync();                 // refresh the dot for the new list
+
+            // TODO #11: the Audio feedback checkbox applies at once and is saved as AudioFeedback.Enabled.
+            if (dlg.AudioFeedback != _audio.Enabled)
+            {
+                _audio.Enabled = dlg.AudioFeedback;
+                if (!_audio.Enabled) _audio.Stop();
+                AppSettings.SaveAudioEnabled(AppSettings.DefaultPath, dlg.AudioFeedback);
+            }
 
             // TODO #8: only touch the registry when the checkbox actually changed.
             if (dlg.StartWithWindows != AutoStart.IsEnabled)
@@ -171,6 +186,10 @@ public partial class MainForm : Form
     // TODO #10: the tiles come from the numbered pictures in Resources (see TileCatalog) and are
     // rebuilt when that folder changes, or from Settings > "Reload tiles".
     private TileFolderWatcher? _tileWatcher;
+
+    // TODO #11: audio feedback, and each tile's own recording (Resources\03_Walk.wav for 03_Walk.png), if any.
+    private readonly AudioFeedback _audio;
+    private readonly Dictionary<string, string?> _tileWav = new();
 
     /// <summary>Watches Resources; a settled change rebuilds the grid on the UI thread.</summary>
     private void WatchTileFolder()
@@ -218,9 +237,11 @@ public partial class MainForm : Form
         for (int r = 0; r < rows; r++)
             tableLayoutPanel1.RowStyles.Add(new RowStyle(SizeType.Percent, 100f / rows));
 
+        _tileWav.Clear();
         for (int i = 0; i < tiles.Count; i++)
         {
             var tile = tiles[i];
+            _tileWav[tile.Label] = AudioFeedback.WavFor(TileCatalog.DefaultFolder, Path.GetFileName(tile.Source));
             // Owner-drawn tile: picture with label beneath, or big text if no usable picture.
             var btn = new TileButton
             {
@@ -300,6 +321,10 @@ public partial class MainForm : Form
 
         // Child feedback is the same for sent and suppressed taps, so Ian always gets a consistent
         // response and isn't taught that tapping again "does nothing" (adults see it in the log).
+        // TODO #11: say the word (or play the tile's .wav) now; it runs in the background, after the
+        // send has started, and a newer tap cuts it off. SpeakRepeats=false makes debounced taps silent.
+        if (!suppressed || Settings.AudioFeedback.SpeakRepeats)
+            _audio.Play(label, _tileWav.GetValueOrDefault(label));
         var originalColor = btn.BackColor;
         btn.BackColor = Color.White;
         await Task.Delay(150);
@@ -312,8 +337,41 @@ public partial class MainForm : Form
             await Task.Delay(1000);
             _overlayLabel.Visible = false;
         }
+    }
 
-        // System.Media.SystemSounds.Asterisk.Play();
+    /// <summary>
+    /// TODO #11 developer check (--selftest-audio [label ...]): speaks each tile (or the given labels)
+    /// in order through the default audio device, waiting for each to finish, and prints what played.
+    /// Uses the AudioFeedback settings except Enabled. Returns 0, or 1 if speech is unavailable.
+    /// </summary>
+    internal static int RunAudioSelfTest(IEnumerable<string> labels)
+    {
+        var set = TileCatalog.Load(TileCatalog.DefaultFolder, Settings);
+        var wavs = set.Tiles.ToDictionary(t => t.Label, t => AudioFeedback.WavFor(TileCatalog.DefaultFolder, Path.GetFileName(t.Source)));
+        set.DisposePictures();
+        var list = labels.ToList();
+        if (list.Count == 0) list = wavs.Keys.ToList();
+
+        using var audio = new AudioFeedback(Settings.AudioFeedback);
+        var a = Settings.AudioFeedback;
+        Console.WriteLine($"Voice: {audio.VoiceName ?? "(unavailable)"}; Speak={a.Speak} Chime={a.Chime} Volume={a.Volume} Rate={a.Rate} Template=\"{a.SpeechTemplate}\"");
+        int failures = 0;
+        foreach (var label in list)
+        {
+            var wav = wavs.GetValueOrDefault(label);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            try
+            {
+                audio.PlaySync(label, wav);
+                Console.WriteLine($"OK    {sw.ElapsedMilliseconds,5} ms  {label}  {(wav != null ? "wav " + Path.GetFileName(wav) : "spoken")}");
+            }
+            catch (Exception ex)
+            {
+                failures++;
+                Console.WriteLine($"FAIL  {sw.ElapsedMilliseconds,5} ms  {label}  {ex.GetType().Name}: {ex.Message}");
+            }
+        }
+        return audio.VoiceName == null || failures > 0 ? 1 : 0;
     }
 
     // TODO #6/#7: every tap goes to %LOCALAPPDATA%\PECS\Logs\communicator-yyyy-MM-dd.csv as up to two rows
