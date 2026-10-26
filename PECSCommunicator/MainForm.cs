@@ -22,9 +22,9 @@
  * [x] 9. make the Listener harder to miss: per-tile sound, flash taskbar button, and/or bring window to front
  * [x] 10. Make the number of tiles/buttons dynamic by reading the .png files in the Resources folder and using their names as the labels. (The color can be a default or derived from the image.)
  * [x] 11. The Communicator needs to provide audio feedback for Ian in addition to the current visual. This emulates the PECS device he uses at school. It should just be a single spoken word, e.g. "Eat", "Help", etc.
- * [ ] 12. Create a REAMDE.md with instructions for running the Communicator and Listener on different platforms, including network configuration and firewall settings as necessary. Include the touch screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
- * [ ] 13. During testing evening of 10/25/2026, after the apps had been running for 20 minutes or so, tapping a tile in the Communicator did not result in a Listener response, and the status bulb shows red.
- * [ ] 14. Explore possibilities for making the Android listener work through the internet isntead of LAN.
+ * [x] 12. During testing evening of 10/25/2026, after the apps had been running for 20 minutes or so, tapping a tile in the Communicator did not result in a Listener response, and the status bulb shows red.
+ * [ ] 13. Implement push notifications through Google (Firebase Cloud Messaging), replacing the current wifi/LAN solution on the phone app.
+ * [ ] 14. Create a README.md with instructions for running the Communicator and Listener on different platforms, including network configuration and firewall settings as necessary. Include the touch screen setup commands, e.g. "MultiDigiMon.exe -touch" to set the touch screen and "tabcal.exe DisplayID=\\.\DISPLAY3" to calibrate it.
  */
 
 namespace PECSCommunicator;

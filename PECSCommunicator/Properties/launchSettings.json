@@ -1,8 +1,7 @@
 {
   "profiles": {
     "PECSCommunicator": {
-      "commandName": "Project",
-      "commandLineArgs": " --selftest-audio "
+      "commandName": "Project"
     }
   }
 }
